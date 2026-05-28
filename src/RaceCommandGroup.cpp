@@ -17,6 +17,7 @@ void RaceCommandGroup::initialize(){
     for(int i = 0; i < static_cast<int>(command_list.size()); i++){
         command_list[i]->initialize();
     }
+    finished = false;
 }
 
 void RaceCommandGroup::execute(){

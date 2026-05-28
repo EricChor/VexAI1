@@ -1,15 +1,15 @@
 #pragma once
-#include <iostream>
 #include "Command.h"
 #include "Drivetrain.h"
+#include "Intake.h"
+#include "RobotConfig.h"
 
-
-struct DriveStraightTarget{
+struct GrabBlockTarget{
     float target_distance;
     float target_heading;
 };
 
-struct DriveStraightConfig {
+struct GrabBlockConfig {
     float max_linear_speed;
     float max_angular_speed;
     float acceptable_error;
@@ -18,7 +18,7 @@ struct DriveStraightConfig {
     float settle_time;
 };
 
-struct DriveStraightVar{
+struct GrabBlockVar{
     float end_time;
     float current_heading;
     float linear_error;
@@ -46,64 +46,73 @@ struct DriveStraightVar{
     bool timed_out;
 };
 
-class DriveStraightCommand : public Command{
+enum GrabBlockResult{
+    GRAB_RUNNING,
+    GRAB_SUCCESS,
+    GRAB_FAILED
+};
+
+class GrabBlockCommand : public Command{
     private:
         Drivetrain& drivetrain;
-        DriveStraightConfig driveStraightConfig;
-        DriveStraightTarget driveStraightTarget;
-        DriveStraightVar driveStraightVar;
+        GrabBlockConfig grabBlockConfig;
+        GrabBlockTarget grabBlockTarget;
+        GrabBlockVar grabBlockVar;
         DrivePID PID;
 
+        GrabBlockResult result;
         bool finished;
 
     public:
-        DriveStraightCommand(Drivetrain& drivetrain, DriveStraightTarget driveStraightTarget, DriveStraightConfig driveStraightConfig, DrivePID PID)
-            :drivetrain(drivetrain),
-             driveStraightTarget(driveStraightTarget),
-             driveStraightConfig(driveStraightConfig),
-             PID(PID),
-             finished(false) {}
-        
+        GrabBlockCommand(Drivetrain &drivetrain, GrabBlockConfig& grabBlockconfig, DrivePID& PID, GrabBlockTarget& grabBlockTarget)
+        :drivetrain(drivetrain),
+         grabBlockConfig(grabBlockconfig),
+         PID(PID),
+         grabBlockTarget(grabBlockTarget),
+         finished(false)
+        {}
+
         void initialize() override{
             finished = false;
-            DriveStraightVar& var = driveStraightVar;
+    
+            GrabBlockVar& var = grabBlockVar;
 
-            var.initial_position = drivetrain.get_left_front_motor_position();
-            var.current_position = var.initial_position;
-            var.end_time = master_timer.time() + driveStraightConfig.max_time;
-            var.max_accel = driveStraightConfig.max_accel / 100;
-
+            var.end_time = master_timer.time() + grabBlockConfig.max_time;
+            var.current_heading = drivetrain.get_heading_degrees();
             var.linear_error = 0;
             var.linear_derivative_error = 0;
             var.linear_previous_error = 0;
             var.linear_integral_error = 0;
-
             var.angular_error = 0;
             var.angular_derivative_error = 0;
             var.angular_previous_error = 0;
             var.angular_integral_error = 0;
-
+            var.initial_position = drivetrain.get_left_front_motor_position();
+            var.current_position = 0;
             var.left_drive_angular_velocity = 0;
             var.right_drive_angular_velocity = 0;
             var.left_drive_linear_velocity = 0;
             var.right_drive_linear_velocity = 0;
-
             var.prev_left_drive_linear_velocity = 0;
             var.prev_right_drive_linear_velocity = 0;
-
+            var.max_accel = grabBlockConfig.max_accel / 100.0;
             var.inside_threshold_timer = 0;
+            var.current_time = 0;
+
             var.threshold_timer_set = false;
             var.at_target = false;
             var.timed_out = false;
-            
+
+            grabBlockTarget.target_heading = drivetrain.get_heading_degrees();
+            result = GRAB_RUNNING;
         }
 
         void execute() override{
-            DriveStraightVar& var = driveStraightVar;
-            DriveStraightConfig& conf = driveStraightConfig;
-            DriveStraightTarget& target = driveStraightTarget;
-            
-            var.current_heading = drivetrain.get_heading_degrees();
+            GrabBlockVar& var = grabBlockVar;
+            GrabBlockConfig& conf = grabBlockConfig;
+            GrabBlockTarget& target = grabBlockTarget;
+                    
+            var.current_heading = drivebase.get_heading_degrees();
             var.angular_error = target.target_heading - var.current_heading;
             if(fabs(var.angular_error) > 180){
                 if(var.angular_error > 0){
@@ -115,7 +124,7 @@ class DriveStraightCommand : public Command{
 
             var.angular_derivative_error = var.angular_error - var.angular_previous_error;
             var.angular_previous_error = var.angular_error;
-            var.current_position = ((drivetrain.get_left_front_motor_position() - var.initial_position) * drivetrain.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivetrain.get_drivebase_gear_ratio()));
+            var.current_position = ((drivebase.get_left_front_motor_position() - var.initial_position) * drivebase.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivebase.get_drivebase_gear_ratio()));
             // std::cout << "Distance: " << driveStraightVar.current_position << std::endl;
 
             var.linear_error = target.target_distance - var.current_position;
@@ -155,7 +164,7 @@ class DriveStraightCommand : public Command{
 
             var.left_drive_linear_velocity = PID.linear_kP * var.linear_error + PID.linear_kI * var.linear_integral_error + PID.linear_kD * var.linear_derivative_error;
             var.right_drive_linear_velocity = PID.linear_kP * var.linear_error + PID.linear_kI * var.linear_integral_error + PID.linear_kD * var.linear_derivative_error;
-            
+                    
             if(((var.left_drive_linear_velocity) > (var.prev_left_drive_linear_velocity + var.max_accel)) && (var.max_accel != 0)){
                 var.left_drive_linear_velocity = var.prev_left_drive_linear_velocity + var.max_accel;
                 var.right_drive_linear_velocity = var.prev_right_drive_linear_velocity + var.max_accel;
@@ -198,11 +207,16 @@ class DriveStraightCommand : public Command{
             if(var.current_time >= var.end_time){
                 var.timed_out = true;
             }
-
             var.prev_left_drive_linear_velocity = var.left_drive_linear_velocity;
             var.prev_right_drive_linear_velocity = var.right_drive_linear_velocity;
 
-            finished = var.at_target || var.timed_out;
+            finished =  var.at_target || var.timed_out;
+
+            if (var.at_target) {
+                result = GRAB_SUCCESS;
+            } else if (var.timed_out) {
+                result = GRAB_FAILED;
+            }
         }
 
         bool isFinished() override{
@@ -210,7 +224,14 @@ class DriveStraightCommand : public Command{
         }
 
         void end() override{
-            // std::cout << "Drive straight distance from target: " << drivetrain.driveStraightVar.linear_error << std::endl;
             drivetrain.stop();
+        }
+
+        bool wasSuccessful(){
+            return result == GRAB_SUCCESS;
+        }
+
+        GrabBlockResult getResult(){
+            return result;
         }
 };

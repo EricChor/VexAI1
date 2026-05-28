@@ -1,30 +1,155 @@
 #pragma once
+#include <iostream>
 #include "Command.h"
 #include "Drivetrain.h"
+#include "RobotConfig.h"
+
+
+struct InertialTurnTarget{
+    float target_heading;
+};
+
+struct InertialTurnConfig{
+    float max_speed;
+    float max_time;
+    float settle_error;
+    float settle_time;
+    float settle_speed;
+};
+
+struct InertialTurnVar{
+    float end_time;
+    float current_heading;
+    float error;
+    float derivative_error;
+    float previous_error;
+    float integral_error;
+    float settle_speed;
+    float left_drive_velocity;
+    float right_drive_velocity;
+
+    float inside_threshold_timer;
+    float current_time;
+
+    bool threshold_timer_set;
+    bool at_target;
+    bool timed_out;
+};
+
 
 class InertialTurnCommand : public Command{
     private:
         Drivetrain& drivetrain;
-        InertialTurnConfig config;
-        InertialTurnTarget target;
+        InertialTurnConfig inertialTurnConfig;
+        InertialTurnTarget inertialTurnTarget;
+        InertialTurnVar inertialTurnVar;
         DrivePID PID;
         bool finished;
 
     public:
-        InertialTurnCommand(Drivetrain& drivetrain, InertialTurnTarget target, InertialTurnConfig config, DrivePID PID)
+        InertialTurnCommand(Drivetrain& drivetrain, InertialTurnTarget& inertialTurnTarget, InertialTurnConfig& inertialTurnConfig, DrivePID& PID)
             :drivetrain(drivetrain),
-             target(target),
-             config(config),
+             inertialTurnTarget(inertialTurnTarget),
+             inertialTurnConfig(inertialTurnConfig),
              PID(PID),
              finished(false) {}
         
         void initialize() override{
             finished = false;
-            drivetrain.inertial_turn_init(config,target,PID);
+            InertialTurnVar& var = inertialTurnVar;
+
+            var.end_time = master_timer.time() + inertialTurnConfig.max_time;
+            var.current_heading = drivetrain.get_heading_degrees();
+            var.error = inertialTurnTarget.target_heading - var.current_heading;
+
+            if(fabs(var.error) > 180){
+                if(var.error > 0){
+                    var.error -= 360;
+                } else {
+                    var.error += 360;
+                }
+            }
+
+            var.derivative_error = 0;
+            var.previous_error = var.error;
+            var.integral_error = 0;
+            var.settle_speed = inertialTurnConfig.settle_speed / 100;
+            var.left_drive_velocity = 0;
+            var.right_drive_velocity = 0;
+            var.inside_threshold_timer = 0;
+            var.threshold_timer_set = false;
+            var.at_target = false;
+            var.timed_out = false;
         }
 
         void execute() override{
-            finished = drivetrain.inertial_turn_step();
+            InertialTurnConfig& conf = inertialTurnConfig;
+            InertialTurnVar& var = inertialTurnVar;
+            InertialTurnTarget& target = inertialTurnTarget;
+            
+            var.current_heading = drivetrain.get_heading_degrees();
+            var.error = target.target_heading - var.current_heading;
+            
+            if(fabs(var.error) > 180){
+                if(var.error > 0){
+                    var.error -= 360;
+                } else {
+                    var.error += 360;
+                }
+            }
+
+            var.derivative_error = var.error - var.previous_error;
+            var.previous_error = var.error;
+
+            if(fabs(var.error) <= PID.angular_integral_windup_threshold){
+                var.integral_error += var.error;
+            } else {
+                var.integral_error = 0;
+            }
+
+            var.left_drive_velocity = PID.angular_kP * var.error + PID.angular_kI * var.integral_error + PID.angular_kD * var.derivative_error;
+            var.right_drive_velocity = PID.angular_kP * var.error + PID.angular_kI * var.integral_error + PID.angular_kD * var.derivative_error;
+
+            if(fabs(var.left_drive_velocity) > conf.max_speed){
+                if(var.left_drive_velocity > 0){
+                    var.left_drive_velocity = conf.max_speed;
+                } else {
+                    var.left_drive_velocity = -conf.max_speed;
+                }
+            }
+
+            if(fabs(var.right_drive_velocity) > conf.max_speed){
+                if(var.right_drive_velocity > 0){
+                    var.right_drive_velocity = conf.max_speed;
+                } else {
+                    var.right_drive_velocity = -conf.max_speed;
+                }
+            }
+            
+            drivetrain.set_drive_power(var.left_drive_velocity,-var.right_drive_velocity);
+
+            var.current_time = master_timer.time();
+
+            if((fabs(var.error) < conf.settle_error) && (fabs(var.derivative_error) < var.settle_speed)){
+                if(!var.threshold_timer_set){
+                    var.inside_threshold_timer = var.current_time + conf.settle_time;
+                    var.threshold_timer_set = true;
+                }
+
+                if(var.current_time > var.inside_threshold_timer){
+                    var.at_target = true;
+                }
+            } else {
+                var.threshold_timer_set = false;
+                var.at_target = false;
+            }
+
+            if(var.current_time >= var.end_time){
+                var.timed_out = true;
+            }
+
+            finished = var.at_target || var.timed_out;
+               
         }
 
         bool isFinished() override{
@@ -32,7 +157,6 @@ class InertialTurnCommand : public Command{
         }
 
         void end() override{
-            std::cout << "Inertial turn distance from target: " << drivetrain.inertialTurnVar.error << std::endl;
             drivetrain.stop();
         }
 };

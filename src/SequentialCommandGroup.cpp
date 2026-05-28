@@ -28,7 +28,7 @@ void SequentialCommandGroup::execute(){
         currentIndex++;
         currentCommandInitialized = false;
 
-        if(currentIndex > static_cast<int>(command_list.size())){
+        if(currentIndex >= static_cast<int>(command_list.size())){
             finished = true;
         }
         return;

@@ -16,9 +16,7 @@ class SequentialCommandGroup : public Command{
             :currentIndex(0),
              finished(false),
              currentCommandInitialized(false)
-            {
-                command_list.reserve(20);
-            }
+            {}
 
         void addCommand(Command* command);
         void initialize() override;

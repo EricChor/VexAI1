@@ -1,39 +1,52 @@
 #pragma once
 #include "vex.h"
-#include "RobotConfig.h"
+#include "allianceColorEnum.h"
 using namespace vex;
 
-struct IntakeWithSortingConfig{
+
+struct IntakeWithSortingConfig {
     float initial_intake_velocity;
     float middle_intake_velcoity;
     float final_intake_velocity;
+
     float red_value;
     float blue_value;
+
     float red_threshold;
     float blue_threshold;
-    float threshold_velocity;
 
     float sorting_time;
+    float accept_time;
+
+    float threshold_velocity;
     float unjamming_time;
 };
-
-struct IntakeWithSortingVar{
+struct IntakeWithSortingVar {
     float red_hue_difference;
     float blue_hue_difference;
     float optical_value;
+
     alliance_color block_color;
 
-    bool done_with_jamming;
+    bool correct_block_detected;
+    bool accepting_correct_block;
+    bool accepting_timer_set;
+    float accepting_end_time;
+
+    bool sorting_out_block;
+    bool sorting_out_block_timer_set;
+    float sorting_end_time;
+    bool done_with_color_sorting;
+
     bool unjamming;
     bool threshold_velocity_passed;
     bool unjamming_timer_set;
     float unjamming_end_time;
+    bool done_with_jamming;
 
-
-    bool done_with_color_sorting;
-    bool sorting_out_block;
-    bool sorting_out_block_timer_set;
-    float sorting_end_time;
+    bool objectSeen;
+    bool seesRed;
+    bool seesBlue;
 };
 
 

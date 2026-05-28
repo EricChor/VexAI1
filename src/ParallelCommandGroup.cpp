@@ -1,7 +1,21 @@
 #include "ParallelCommandGroup.h"
 
+void ParallelCommandGroup::addCommand(Command* command){
+    if(command == nullptr){
+        return;
+    }
+    command_list.push_back(command);
+    commandFinished.push_back(false);
+}   
+
 void ParallelCommandGroup::initialize() {
     finished = false;
+
+    if(command_list.empty()){
+        finished = true;
+        return;
+    }
+    
     for(int i = 0; i < command_list.size(); i++){
         commandFinished[i] = false;
 

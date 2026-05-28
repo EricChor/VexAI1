@@ -3,6 +3,11 @@
 #include "Scheduler.h"
 #include "Drivetrain.h"
 #include "SequentialCommandGroup.h"
+#include "JetsonSerial.h"
+#include "Intake.h"
+#include "allianceColorEnum.h"
+#include "PositionTracking.h"
+
 using namespace vex;
 
 extern motor left_front;
@@ -26,9 +31,9 @@ extern timer master_timer;
 
 extern Drivetrain drivebase;
 
-extern Scheduler scheduler;
+extern Intake intake;
 
-extern SequentialCommandGroup route_one;
+extern Scheduler scheduler;
 
 extern controller Controller;
 
@@ -36,9 +41,10 @@ extern brain Brain;
 
 extern optical intake_color_sorting_optical;
 
-enum alliance_color{
-    RED,
-    BLUE
-};
-
 extern alliance_color current_alliance_color;
+
+extern JetsonSerial jetsonSerial;
+
+extern gps GPSSensor;
+
+extern PositionTracking positionTracking;

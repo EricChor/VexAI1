@@ -9,8 +9,9 @@ class ParallelDeadlineGroup : public Command{
         bool finished;
     
     public:
-        ParallelDeadlineGroup()
-            :finished(false)
+        ParallelDeadlineGroup(Command* deadlineCommand)
+            :deadlineCommand(deadlineCommand),
+             finished(false)
             { 
                 command_list.reserve(5);
             }

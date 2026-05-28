@@ -1,5 +1,8 @@
 #include "RobotConfig.h"
 
+
+brain Brain;
+
 motor left_front(PORT15,ratio6_1,true);
 motor left_back_bottom(PORT18,ratio6_1,true);
 motor left_back_top(PORT11,ratio6_1,false);
@@ -21,12 +24,18 @@ timer master_timer;
 
 Drivetrain drivebase(3.25,2.0/1);
 
+Intake intake;
+
 Scheduler scheduler{};
 
 controller Controller(primary);
 
-brain Brain;
-
 optical intake_color_sorting_optical(PORT19);
 
 alliance_color current_alliance_color = RED;
+
+JetsonSerial jetsonSerial;
+
+PositionTracking positionTracking;
+
+gps GPSSensor (PORT5);

@@ -32,6 +32,11 @@ void Drivetrain::set_odom_pose(float x, float y, float theta) {
     pose.x = x;
     pose.y = y;
     pose.theta = theta;
+    set_heading_degrees(theta);
+}
+
+void Drivetrain::set_heading_degrees(float theta) {
+    drivetrain_inertial.setHeading(theta, degrees);
 }
 
 void Drivetrain::update_odom_pose(){

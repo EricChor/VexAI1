@@ -538,10 +538,14 @@ void JetsonSerial::track_block_raw_init(TrackBlockRawConfig config){
     var.xJumpValid = false;
     var.yJumpValid = false;
 
-    // If update_block_pose() already has detections, start by tracking the red block
-    // closest to the camera center.
-    if(block_count > 0){
+    // Prefer the block that FindBlockCommand already selected and approved.
+    // If tracking is started without a selected block, fall back to the closest
+    // block to camera center.
+    if(block_x_pos < 0 || block_y_pos < 0){
         select_block_closest_to(conf.cameraCenterX, conf.cameraCenterY);
+    }
+
+    if(block_x_pos >= 0 && block_y_pos >= 0){
 
         var.lastBlockXPos = block_x_pos;
         var.lastBlockYPos = block_y_pos;
@@ -571,9 +575,6 @@ bool JetsonSerial::track_block_raw_step(){
         if(var.lostFrameCount > conf.maxLostFrames){
             var.trackingLocked = false;
 
-            var.lastBlockXPos = -1;
-            var.lastBlockYPos = -1;
-
             var.xError = 0;
             var.yError = 0;
 
@@ -593,9 +594,14 @@ bool JetsonSerial::track_block_raw_step(){
     var.targetVisible = true;
 
     // Sees a red block but tracking is not locked yet.
-    // Start with the red block closest to the camera center.
+    // On a fresh lock, start closest to center. On a reacquire after losing
+    // tracking, stay with the block closest to the last tracked position.
     if(!var.trackingLocked){
-        select_block_closest_to(conf.cameraCenterX, conf.cameraCenterY);
+        if(var.lastBlockXPos >= 0 && var.lastBlockYPos >= 0){
+            select_block_closest_to(var.lastBlockXPos, var.lastBlockYPos);
+        } else {
+            select_block_closest_to(conf.cameraCenterX, conf.cameraCenterY);
+        }
 
         var.lastBlockXPos = block_x_pos;
         var.lastBlockYPos = block_y_pos;
@@ -633,14 +639,14 @@ bool JetsonSerial::track_block_raw_step(){
         if(var.lostFrameCount > conf.maxLostFrames){
             var.trackingLocked = false;
 
-            var.lastBlockXPos = -1;
-            var.lastBlockYPos = -1;
-
             var.xError = 0;
             var.yError = 0;
 
             var.xJump = 0;
             var.yJump = 0;
+
+            var.xJumpValid = false;
+            var.yJumpValid = false;
 
             return false;
         }
@@ -701,4 +707,7 @@ void JetsonSerial::print_block_pos_on_screen(){
 
     Brain.Screen.setCursor(10, 1);
     Brain.Screen.print("GPS H: %.2f    ", positionTracking.get_heading());
+
+    Brain.Screen.setCursor(11, 1);
+    Brain.Screen.print("IMU H: %.2f    ", drivebase.get_heading_degrees());
 }

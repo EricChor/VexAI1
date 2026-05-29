@@ -1,8 +1,10 @@
 #pragma once
+#include <cmath>
 #include <iostream>
 #include "Command.h"
 #include "Drivetrain.h"
 #include "RobotConfig.h"
+#include "UnstuckArcHelper.h"
 
 
 struct InertialTurnTarget{
@@ -15,6 +17,7 @@ struct InertialTurnConfig{
     float settle_error;
     float settle_time;
     float settle_speed;
+    UnstuckArcConfig unstuck;
 };
 
 struct InertialTurnVar{
@@ -44,6 +47,7 @@ class InertialTurnCommand : public Command{
         InertialTurnTarget inertialTurnTarget;
         InertialTurnVar inertialTurnVar;
         DrivePID PID;
+        UnstuckArcHelper unstuck;
         bool finished;
 
     public:
@@ -80,6 +84,9 @@ class InertialTurnCommand : public Command{
             var.threshold_timer_set = false;
             var.at_target = false;
             var.timed_out = false;
+
+            unstuck.configure(inertialTurnConfig.unstuck);
+            unstuck.initialize(drivetrain, std::fabs(var.error));
         }
 
         void execute() override{
@@ -100,6 +107,26 @@ class InertialTurnCommand : public Command{
 
             var.derivative_error = var.error - var.previous_error;
             var.previous_error = var.error;
+
+            float progressError = std::fabs(var.error);
+
+            var.current_time = master_timer.time();
+
+            if (var.current_time >= var.end_time) {
+                var.timed_out = true;
+                finished = true;
+                return;
+            }
+
+            if (unstuck.run(drivetrain, progressError)) {
+                return;
+            }
+
+            if (unstuck.hasFailed()) {
+                var.timed_out = true;
+                finished = true;
+                return;
+            }
 
             if(fabs(var.error) <= PID.angular_integral_windup_threshold){
                 var.integral_error += var.error;
@@ -124,6 +151,22 @@ class InertialTurnCommand : public Command{
                 } else {
                     var.right_drive_velocity = -conf.max_speed;
                 }
+            }
+
+            bool tryingToTurn =
+                std::fabs(var.error) > conf.settle_error &&
+                (
+                    std::fabs(var.left_drive_velocity) > 5.0f ||
+                    std::fabs(var.right_drive_velocity) > 5.0f
+                );
+
+            if (unstuck.shouldStart(drivetrain, progressError, tryingToTurn)) {
+                if (!unstuck.start(drivetrain, progressError)) {
+                    var.timed_out = true;
+                    finished = true;
+                }
+
+                return;
             }
             
             drivetrain.set_drive_power(var.left_drive_velocity,-var.right_drive_velocity);

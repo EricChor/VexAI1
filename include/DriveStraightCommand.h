@@ -1,7 +1,9 @@
 #pragma once
+#include <cmath>
 #include <iostream>
 #include "Command.h"
 #include "Drivetrain.h"
+#include "UnstuckArcHelper.h"
 
 
 struct DriveStraightTarget{
@@ -16,6 +18,7 @@ struct DriveStraightConfig {
     float max_time;
     float max_accel;
     float settle_time;
+    UnstuckArcConfig unstuck;
 };
 
 struct DriveStraightVar{
@@ -53,6 +56,7 @@ class DriveStraightCommand : public Command{
         DriveStraightTarget driveStraightTarget;
         DriveStraightVar driveStraightVar;
         DrivePID PID;
+        UnstuckArcHelper unstuck;
 
         bool finished;
 
@@ -95,6 +99,12 @@ class DriveStraightCommand : public Command{
             var.threshold_timer_set = false;
             var.at_target = false;
             var.timed_out = false;
+
+            unstuck.configure(driveStraightConfig.unstuck);
+            unstuck.initialize(
+                drivetrain,
+                std::fabs(driveStraightTarget.target_distance)
+            );
             
         }
 
@@ -121,6 +131,26 @@ class DriveStraightCommand : public Command{
             var.linear_error = target.target_distance - var.current_position;
             var.linear_derivative_error = var.linear_error - var.linear_previous_error;
             var.linear_previous_error = var.linear_error;
+
+            float progressError = std::fabs(var.linear_error);
+
+            var.current_time = master_timer.time();
+
+            if (var.current_time >= var.end_time) {
+                var.timed_out = true;
+                finished = true;
+                return;
+            }
+
+            if (unstuck.run(drivetrain, progressError)) {
+                return;
+            }
+
+            if (unstuck.hasFailed()) {
+                var.timed_out = true;
+                finished = true;
+                return;
+            }
 
             if(fabs(var.angular_error) <= PID.angular_integral_windup_threshold){
                 var.angular_integral_error += var.angular_error;
@@ -175,6 +205,24 @@ class DriveStraightCommand : public Command{
                 } else {
                     var.right_drive_linear_velocity = -conf.max_linear_speed;
                 }
+            }
+
+            bool tryingToMove =
+                std::fabs(var.linear_error) > conf.acceptable_error &&
+                (
+                    std::fabs(var.left_drive_linear_velocity) > 5.0f ||
+                    std::fabs(var.right_drive_linear_velocity) > 5.0f ||
+                    std::fabs(var.left_drive_angular_velocity) > 5.0f ||
+                    std::fabs(var.right_drive_angular_velocity) > 5.0f
+                );
+
+            if (unstuck.shouldStart(drivetrain, progressError, tryingToMove)) {
+                if (!unstuck.start(drivetrain, progressError)) {
+                    var.timed_out = true;
+                    finished = true;
+                }
+
+                return;
             }
 
             drivetrain.set_drive_power(var.left_drive_linear_velocity+var.left_drive_angular_velocity,var.right_drive_linear_velocity+var.right_drive_angular_velocity);

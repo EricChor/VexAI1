@@ -48,3 +48,7 @@ extern JetsonSerial jetsonSerial;
 extern gps GPSSensor;
 
 extern PositionTracking positionTracking;
+
+extern vex::distance leftDistanceAligner;
+
+extern vex::distance rightDistanceAligner;

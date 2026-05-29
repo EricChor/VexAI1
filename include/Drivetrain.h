@@ -48,6 +48,7 @@ class Drivetrain{
         Pose get_pose() const;
         Drivetrain (float driveBaseWheelDiameter, float driveBaseGearRatio);
         void set_odom_pose(float x, float y, float theta);
+        void set_heading_degrees(float theta);
         void update_odom_pose();
 
         void set_drive_power(float left_power, float right_power);

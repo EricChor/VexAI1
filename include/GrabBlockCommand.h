@@ -1,8 +1,10 @@
 #pragma once
+#include <cmath>
 #include "Command.h"
 #include "Drivetrain.h"
 #include "Intake.h"
 #include "RobotConfig.h"
+#include "UnstuckArcHelper.h"
 
 struct GrabBlockTarget{
     float target_distance;
@@ -16,6 +18,7 @@ struct GrabBlockConfig {
     float max_time;
     float max_accel;
     float settle_time;
+    UnstuckArcConfig unstuck;
 };
 
 struct GrabBlockVar{
@@ -59,6 +62,7 @@ class GrabBlockCommand : public Command{
         GrabBlockTarget grabBlockTarget;
         GrabBlockVar grabBlockVar;
         DrivePID PID;
+        UnstuckArcHelper unstuck;
 
         GrabBlockResult result;
         bool finished;
@@ -105,6 +109,12 @@ class GrabBlockCommand : public Command{
 
             grabBlockTarget.target_heading = drivetrain.get_heading_degrees();
             result = GRAB_RUNNING;
+
+            unstuck.configure(grabBlockConfig.unstuck);
+            unstuck.initialize(
+                drivetrain,
+                std::fabs(grabBlockTarget.target_distance)
+            );
         }
 
         void execute() override{
@@ -112,7 +122,7 @@ class GrabBlockCommand : public Command{
             GrabBlockConfig& conf = grabBlockConfig;
             GrabBlockTarget& target = grabBlockTarget;
                     
-            var.current_heading = drivebase.get_heading_degrees();
+            var.current_heading = drivetrain.get_heading_degrees();
             var.angular_error = target.target_heading - var.current_heading;
             if(fabs(var.angular_error) > 180){
                 if(var.angular_error > 0){
@@ -124,12 +134,34 @@ class GrabBlockCommand : public Command{
 
             var.angular_derivative_error = var.angular_error - var.angular_previous_error;
             var.angular_previous_error = var.angular_error;
-            var.current_position = ((drivebase.get_left_front_motor_position() - var.initial_position) * drivebase.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivebase.get_drivebase_gear_ratio()));
+            var.current_position = ((drivetrain.get_left_front_motor_position() - var.initial_position) * drivetrain.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivetrain.get_drivebase_gear_ratio()));
             // std::cout << "Distance: " << driveStraightVar.current_position << std::endl;
 
             var.linear_error = target.target_distance - var.current_position;
             var.linear_derivative_error = var.linear_error - var.linear_previous_error;
             var.linear_previous_error = var.linear_error;
+
+            float progressError = std::fabs(var.linear_error);
+
+            var.current_time = master_timer.time();
+
+            if (var.current_time >= var.end_time) {
+                var.timed_out = true;
+                finished = true;
+                result = GRAB_FAILED;
+                return;
+            }
+
+            if (unstuck.run(drivetrain, progressError)) {
+                return;
+            }
+
+            if (unstuck.hasFailed()) {
+                var.timed_out = true;
+                finished = true;
+                result = GRAB_FAILED;
+                return;
+            }
 
             if(fabs(var.angular_error) <= PID.angular_integral_windup_threshold){
                 var.angular_integral_error += var.angular_error;
@@ -184,6 +216,25 @@ class GrabBlockCommand : public Command{
                 } else {
                     var.right_drive_linear_velocity = -conf.max_linear_speed;
                 }
+            }
+
+            bool tryingToMove =
+                std::fabs(var.linear_error) > conf.acceptable_error &&
+                (
+                    std::fabs(var.left_drive_linear_velocity) > 5.0f ||
+                    std::fabs(var.right_drive_linear_velocity) > 5.0f ||
+                    std::fabs(var.left_drive_angular_velocity) > 5.0f ||
+                    std::fabs(var.right_drive_angular_velocity) > 5.0f
+                );
+
+            if (unstuck.shouldStart(drivetrain, progressError, tryingToMove)) {
+                if (!unstuck.start(drivetrain, progressError)) {
+                    var.timed_out = true;
+                    finished = true;
+                    result = GRAB_FAILED;
+                }
+
+                return;
             }
 
             drivetrain.set_drive_power(var.left_drive_linear_velocity+var.left_drive_angular_velocity,var.right_drive_linear_velocity+var.right_drive_angular_velocity);

@@ -152,6 +152,8 @@
 #include "JetsonSerial.h"
 #include "Drivetrain.h"
 #include "RobotConfig.h"
+#include "PositionTracking.h"
+#include "FieldAvoidZone.h"
 
 #include <cmath>
 
@@ -173,11 +175,18 @@ struct TrackingBlocksConfig {
 
     float maxReverseTime;                  // ms
     float maxForwardTime;                  // ms
-    float maxTurnTime;                     // ms
 
     float minLinearSpeedForStuckCheck;
     float minYErrorProgress;
-    
+
+    // How many raw tracking failures to tolerate before giving up.
+    int maxTrackingDroppedFrames;
+
+    // How many full unstuck escape cycles to try before giving up.
+    int maxUnstuckAttempts;
+
+    // Used to estimate a block's field position before it is perfectly centered.
+    float cameraHorizontalFovDegrees;
 
     // Avoid-zone settings
     FieldAvoidZone avoidZones[3];
@@ -185,10 +194,10 @@ struct TrackingBlocksConfig {
 
 enum TrackBlockState {
     TRACKING_NORMAL,
-    TRACKING_UNSTUCK_REVERSE,
-    TRACKING_UNSTUCK_FORWARD,
-    TRACKING_UNSTUCK_TURN_LEFT,
-    TRACKING_UNSTUCK_TURN_RIGHT,
+    TRACKING_UNSTUCK_FORWARD_RIGHT,
+    TRACKING_UNSTUCK_FORWARD_LEFT,
+    TRACKING_UNSTUCK_BACK_RIGHT,
+    TRACKING_UNSTUCK_BACK_LEFT,
     TRACK_BLOCK_DONE
 };
 
@@ -203,6 +212,7 @@ enum TrackBlockResult {
 class TrackBlockCommand : public Command {
 private:
     Drivetrain& drivetrain;
+    PositionTracking& positionTracking;
     JetsonSerial& jetson;
 
     TrackBlockRawConfig trackingConfig;
@@ -232,10 +242,12 @@ private:
 
     bool xCentered;
     bool yCloseEnough;
+    int droppedTrackingFrameCount;
 
     // Stuck detection variables
     float lastStuckCheckTime;
     float unstuckStartTime;
+    int unstuckAttemptCount;
 
     float lastHeading;
     float lastEncoderPosition;
@@ -248,6 +260,13 @@ private:
     int lastProgressYError;
 
 private:
+    void failStuck() {
+        drivetrain.set_drive_power(0, 0);
+        result = TRACK_BLOCK_STUCK_FAILED;
+        currentState = TRACK_BLOCK_DONE;
+        finished = true;
+    }
+
     float getHeadingChange(float currentHeading, float previousHeading) {
         float change = currentHeading - previousHeading;
 
@@ -271,32 +290,45 @@ private:
             + 53.72545f;
     }
 
-    void estimateBlockFieldPosition(float blockDistance) {
-        Pose robotPose = drivetrain.get_pose();
+    void estimateBlockFieldPosition(float blockDistance, float pixelX) {
+        positionTracking.update_raw_pose();
 
-        float robotX = robotPose.x;
-        float robotY = robotPose.y;
-
-        float robotHeadingDeg = drivetrain.get_heading_degrees();
+        float robotX = positionTracking.get_x();
+        float robotY = positionTracking.get_y();
+        float robotHeadingDeg = positionTracking.get_heading();
 
         const float PI = 3.14159265f;
-        float robotHeadingRad = robotHeadingDeg * PI / 180.0f;
+        float blockBearingDeg = 0.0f;
+
+        if (config.cameraHorizontalFovDegrees > 0.0f &&
+            trackingConfig.cameraCenterX > 0) {
+
+            float horizontalError = pixelX - trackingConfig.cameraCenterX;
+            float normalizedError =
+                horizontalError / static_cast<float>(trackingConfig.cameraCenterX);
+
+            blockBearingDeg =
+                normalizedError * config.cameraHorizontalFovDegrees / 2.0f;
+        }
+
+        float blockFieldHeadingRad =
+            (robotHeadingDeg + blockBearingDeg) * PI / 180.0f;
 
         /*
             Assumption:
             heading 0 degrees = field +Y
             heading 90 degrees = field +X
 
-            Since we are assuming the block is centered in front of the robot:
-            relative block X = 0
-            relative block Y = blockDistance
+            The block's pixel x-position gives a rough bearing offset from
+            the robot's centerline. This keeps avoid checks useful before
+            the block is perfectly centered.
         */
 
         estimatedBlockFieldX =
-            robotX + blockDistance * std::sin(robotHeadingRad);
+            robotX + blockDistance * std::sin(blockFieldHeadingRad);
 
         estimatedBlockFieldY =
-            robotY + blockDistance * std::cos(robotHeadingRad);
+            robotY + blockDistance * std::cos(blockFieldHeadingRad);
     }
 
     bool pointInsideAvoidZone(float pointX, float pointY, const FieldAvoidZone& zone) {
@@ -304,13 +336,18 @@ private:
             return false;
         }
 
+        float lowX = zone.minX < zone.maxX ? zone.minX : zone.maxX;
+        float highX = zone.minX < zone.maxX ? zone.maxX : zone.minX;
+        float lowY = zone.minY < zone.maxY ? zone.minY : zone.maxY;
+        float highY = zone.minY < zone.maxY ? zone.maxY : zone.minY;
+
         bool insideX =
-            pointX >= zone.minX &&
-            pointX <= zone.maxX;
+            pointX >= lowX &&
+            pointX <= highX;
 
         bool insideY =
-            pointY >= zone.minY &&
-            pointY <= zone.maxY;
+            pointY >= lowY &&
+            pointY <= highY;
 
         return insideX && insideY;
     }
@@ -330,53 +367,67 @@ private:
     }
 
     bool shouldAvoidCurrentBlock() {
-        /*
-            This uses the block's pixel y-position to estimate distance.
-            If your JetsonSerial does not have getYPos(), either add it
-            or replace jetson.getYPos() with jetson.block_y_pos.
-        */
+        if (jetson.block_x_pos < 0 || jetson.block_y_pos < 0) {
+            return false;
+        }
 
         estimatedBlockDistance =
             estimateBlockDistanceFromPixelY(jetson.block_y_pos);
 
-        estimateBlockFieldPosition(estimatedBlockDistance);
+        estimateBlockFieldPosition(
+            estimatedBlockDistance,
+            jetson.block_x_pos
+        );
 
         return blockIsInsideAnyAvoidZone();
     }
 
     void resetStuckMonitor() {
-            float now = master_timer.time(msec);
+        float now = master_timer.time(msec);
 
-            lastStuckCheckTime = now;
+        lastStuckCheckTime = now;
 
-            lastHeading = drivetrain.get_heading_degrees();
-            lastEncoderPosition = drivetrain.get_left_front_motor_position();
+        lastHeading = drivetrain.get_heading_degrees();
+        lastEncoderPosition = drivetrain.get_left_front_motor_position();
 
-            lastProgressYError = yError;
+        lastProgressYError = yError;
     }
 
-    void startUnstuckReverse() {
-        currentState = TRACKING_UNSTUCK_REVERSE;
+    void startUnstuckForwardRight() {
+        if (unstuckAttemptCount >= config.maxUnstuckAttempts) {
+            failStuck();
+            return;
+        }
+
+        unstuckAttemptCount++;
+        currentState = TRACKING_UNSTUCK_FORWARD_RIGHT;
         unstuckStartTime = master_timer.time(msec);
         resetStuckMonitor();
     }
 
-    void startUnstuckForward() {
-        currentState = TRACKING_UNSTUCK_FORWARD;
+    void startUnstuckForwardLeft() {
+        currentState = TRACKING_UNSTUCK_FORWARD_LEFT;
         unstuckStartTime = master_timer.time(msec);
         resetStuckMonitor();
     }
 
-    void startUnstuckTurnLeft() {
-        currentState = TRACKING_UNSTUCK_TURN_LEFT;
+    void startUnstuckBackRight() {
+        currentState = TRACKING_UNSTUCK_BACK_RIGHT;
         unstuckStartTime = master_timer.time(msec);
         resetStuckMonitor();
     }
 
-    void startUnstuckTurnRight() {
-        currentState = TRACKING_UNSTUCK_TURN_RIGHT;
+    void startUnstuckBackLeft() {
+        currentState = TRACKING_UNSTUCK_BACK_LEFT;
         unstuckStartTime = master_timer.time(msec);
         resetStuckMonitor();
+    }
+
+    void applyUnstuckArc(float linearSpeed, float turnSpeed) {
+        drivetrain.set_drive_power(
+            linearSpeed + turnSpeed,
+            linearSpeed - turnSpeed
+        );
     }
 
     void returnToNormalTracking() {
@@ -429,47 +480,47 @@ private:
             return true;
         }
 
-    return false;
-}
+        return false;
+    }
 
     void runUnstuckState() {
         float now = master_timer.time(msec);
         float elapsed = now - unstuckStartTime;
 
-        if (currentState == TRACKING_UNSTUCK_REVERSE) {
-            drivetrain.set_drive_power(-config.reverseSpeed, -config.reverseSpeed);
-
-            if (elapsed >= config.maxReverseTime) {
-                startUnstuckForward();
-            }
-
-            return;
-        }
-
-        if (currentState == TRACKING_UNSTUCK_FORWARD) {
-            drivetrain.set_drive_power(config.forwardSpeed, config.forwardSpeed);
+        if (currentState == TRACKING_UNSTUCK_FORWARD_RIGHT) {
+            applyUnstuckArc(config.forwardSpeed, config.turnSpeed);
 
             if (elapsed >= config.maxForwardTime) {
-                startUnstuckTurnLeft();
+                startUnstuckForwardLeft();
             }
 
             return;
         }
 
-        if (currentState == TRACKING_UNSTUCK_TURN_LEFT) {
-            drivetrain.set_drive_power(-config.turnSpeed, config.turnSpeed);
+        if (currentState == TRACKING_UNSTUCK_FORWARD_LEFT) {
+            applyUnstuckArc(config.forwardSpeed, -config.turnSpeed);
 
-            if (elapsed >= config.maxTurnTime) {
-                startUnstuckTurnRight();
+            if (elapsed >= config.maxForwardTime) {
+                startUnstuckBackRight();
             }
 
             return;
         }
 
-        if (currentState == TRACKING_UNSTUCK_TURN_RIGHT) {
-            drivetrain.set_drive_power(config.turnSpeed, -config.turnSpeed);
+        if (currentState == TRACKING_UNSTUCK_BACK_RIGHT) {
+            applyUnstuckArc(-config.reverseSpeed, config.turnSpeed);
 
-            if (elapsed >= config.maxTurnTime) {
+            if (elapsed >= config.maxReverseTime) {
+                startUnstuckBackLeft();
+            }
+
+            return;
+        }
+
+        if (currentState == TRACKING_UNSTUCK_BACK_LEFT) {
+            applyUnstuckArc(-config.reverseSpeed, -config.turnSpeed);
+
+            if (elapsed >= config.maxReverseTime) {
                 returnToNormalTracking();
             }
 
@@ -480,12 +531,14 @@ private:
 public:
     TrackBlockCommand(
         Drivetrain& drivetrain,
+        PositionTracking& positionTracking,
         JetsonSerial& jetson,
         const TrackingBlocksConfig& config,
         const TrackBlockRawConfig& trackingConfig,
         const DrivePID& PID
     )
         : drivetrain(drivetrain),
+          positionTracking(positionTracking),
           jetson(jetson),
           config(config),
           trackingConfig(trackingConfig),
@@ -506,8 +559,10 @@ public:
           angularSpeed(0),
           xCentered(false),
           yCloseEnough(false),
+          droppedTrackingFrameCount(0),
           lastStuckCheckTime(0),
           unstuckStartTime(0),
+          unstuckAttemptCount(0),
           lastHeading(0),
           lastEncoderPosition(0),
           estimatedBlockDistance(0),
@@ -540,6 +595,8 @@ public:
 
         xCentered = false;
         yCloseEnough = false;
+        droppedTrackingFrameCount = 0;
+        unstuckAttemptCount = 0;
 
         estimatedBlockDistance = 0;
         estimatedBlockFieldX = 0;
@@ -567,11 +624,26 @@ public:
         trackingValid = jetson.track_block_raw_step();
 
         if (!trackingValid) {
+            droppedTrackingFrameCount++;
             drivetrain.set_drive_power(0, 0);
+
+            if (droppedTrackingFrameCount <= config.maxTrackingDroppedFrames) {
+                resetStuckMonitor();
+                return;
+            }
+
             result = TRACK_BLOCK_LOST;
             finished = true;
             return;
         }
+
+        droppedTrackingFrameCount = 0;
+
+        xError = jetson.getXError();
+        xDerivativeError = xError - xPrevError;
+
+        xCentered =
+            std::abs(xError) <= config.acceptableXError;
 
         if (shouldAvoidCurrentBlock()) {
             drivetrain.set_drive_power(0, 0);
@@ -579,11 +651,6 @@ public:
             finished = true;
             return;
         }
-
-      
-
-        xError = jetson.getXError();
-        xDerivativeError = xError - xPrevError;
 
         if (std::abs(xError) <= PID.angular_integral_windup_threshold) {
             xIntegralError += xError;
@@ -632,17 +699,14 @@ public:
         bool tryingToDrive = std::fabs(linearSpeed) >= config.minLinearSpeedForStuckCheck;
 
         if (tryingToDrive && !robotMadeProgressWhileTracking()) {
-            startUnstuckReverse();
+            startUnstuckForwardRight();
             return;
-}
+        }
 
         drivetrain.set_drive_power(
             linearSpeed + angularSpeed,
             linearSpeed - angularSpeed
         );
-
-        xCentered =
-            std::abs(xError) <= config.acceptableXError;
 
         yCloseEnough =
             std::abs(yError) <= config.acceptableYError;

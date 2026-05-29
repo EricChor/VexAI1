@@ -63,6 +63,10 @@ class Intake{
         float final_intake_power;
 
         alliance_color& current_alliance_color;
+
+        int accepted_block_count;
+        int blocks_before_scoring;
+        bool counting_current_object;
     public:
 
         IntakeWithSortingConfig intakeWithSortingConfig;
@@ -77,6 +81,12 @@ class Intake{
         void color_sorting();
         void score_high();
         void score_mid();
+
+        void set_blocks_before_scoring(int block_count);
+        int get_blocks_before_scoring() const;
+        int get_accepted_block_count() const;
+        bool has_enough_blocks_to_score() const;
+        void reset_accepted_block_count();
 
         void set_intake_power(float initial_intake_power, float middle_intake_power, float final_intake_power);
         void apply_motor_power();

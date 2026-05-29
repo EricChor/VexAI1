@@ -7,7 +7,10 @@ Intake::Intake()
  middle_intake(::middle_intake),
  final_intake(::final_intake),
  intake_color_sorting_optical(::intake_color_sorting_optical),
- current_alliance_color(::current_alliance_color)
+ current_alliance_color(::current_alliance_color),
+ accepted_block_count(0),
+ blocks_before_scoring(1),
+ counting_current_object(false)
 {}
 
 void Intake::set_intake_power(float initial_intake_power, float middle_intake_power, float final_intake_power){
@@ -30,11 +33,36 @@ void Intake::color_sorting(){
 }
 
 void Intake::score_high(){
-    Intake::set_intake_power(100,-100,-100);
+    Intake::set_intake_power(100,-100,100);
 }
 
 void Intake::score_mid(){
-    Intake::set_intake_power(100,-100,100);
+    Intake::set_intake_power(100,-100,-100);
+}
+
+void Intake::set_blocks_before_scoring(int block_count){
+    if(block_count < 1){
+        block_count = 1;
+    }
+
+    blocks_before_scoring = block_count;
+}
+
+int Intake::get_blocks_before_scoring() const{
+    return blocks_before_scoring;
+}
+
+int Intake::get_accepted_block_count() const{
+    return accepted_block_count;
+}
+
+bool Intake::has_enough_blocks_to_score() const{
+    return accepted_block_count >= blocks_before_scoring;
+}
+
+void Intake::reset_accepted_block_count(){
+    accepted_block_count = 0;
+    counting_current_object = false;
 }
 
 void Intake::stop(){
@@ -110,6 +138,10 @@ bool Intake::intake_with_sorting_step() {
     var.correct_block_detected = false;
     var.sorting_out_block = false;
 
+    if (!var.objectSeen) {
+        counting_current_object = false;
+    }
+
     if (var.objectSeen) {
         var.seesRed =
             fabs(var.red_hue_difference) < conf.red_threshold &&
@@ -135,6 +167,11 @@ bool Intake::intake_with_sorting_step() {
     }
 
     if (var.correct_block_detected && !var.accepting_timer_set) {
+        if (!counting_current_object) {
+            accepted_block_count++;
+            counting_current_object = true;
+        }
+
         var.accepting_end_time = now + conf.accept_time;
         var.accepting_timer_set = true;
         var.accepting_correct_block = true;

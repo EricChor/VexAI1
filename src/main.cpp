@@ -14,7 +14,12 @@ int main() {
     while(drivetrain_inertial.isCalibrating() || GPSSensor.isCalibrating()){
         vex::task::sleep(10);
     }
-    drivetrain_inertial.setHeading(positionTracking.get_heading(),degrees);
+    positionTracking.update_raw_pose();
+    drivebase.set_odom_pose(
+        positionTracking.get_x(),
+        positionTracking.get_y(),
+        positionTracking.get_heading());
+
     while(true){
         drivebase.update_odom_pose();
         scheduler.run();
@@ -25,6 +30,5 @@ int main() {
     }
 
 }
-
 
 

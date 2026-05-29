@@ -2,6 +2,7 @@
 #include "Command.h"
 #include "PositionTracking.h"
 #include "RobotConfig.h"
+#include "CommandStatus.h"
 
 struct GetGPSCoordinatesFilteredConfig{
     int sampleCount;
@@ -55,13 +56,14 @@ class GetGPSCoordinatesFilteredCommand : public Command{
         bool successful;
 
         float normalizeHeading(float heading){
-            if(heading > 360){
+            while(heading >= 360){
                 heading -= 360;
             }
 
-            if(heading <0){
+            while(heading < 0){
                 heading += 360;
             }
+
             return heading;
         }
 
@@ -84,6 +86,7 @@ class GetGPSCoordinatesFilteredCommand : public Command{
         {}
 
         void initialize() override{
+            setCommandStatus("Read Filtered GPS");
             GetGPSCoordinatesFilteredVar& var = getGPSCoordinatesFilteredVar;
             finished = false;
             successful = false;

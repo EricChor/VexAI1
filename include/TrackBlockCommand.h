@@ -154,6 +154,7 @@
 #include "RobotConfig.h"
 #include "PositionTracking.h"
 #include "FieldAvoidZone.h"
+#include "CommandStatus.h"
 
 #include <cmath>
 
@@ -189,7 +190,7 @@ struct TrackingBlocksConfig {
     float cameraHorizontalFovDegrees;
 
     // Avoid-zone settings
-    FieldAvoidZone avoidZones[3];
+    FieldAvoidZone avoidZones[9];
 };
 
 enum TrackBlockState {
@@ -353,7 +354,7 @@ private:
     }
 
     bool blockIsInsideAnyAvoidZone() {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 9; i++) {
             if (pointInsideAvoidZone(
                     estimatedBlockFieldX,
                     estimatedBlockFieldY,
@@ -380,6 +381,156 @@ private:
         );
 
         return blockIsInsideAnyAvoidZone();
+    }
+
+    bool candidateBlockIsInsideAvoidZone(int pixelX, int pixelY) {
+        if (pixelX < 0 || pixelY < 0) {
+            return false;
+        }
+
+        estimatedBlockDistance =
+            estimateBlockDistanceFromPixelY(pixelY);
+
+        estimateBlockFieldPosition(
+            estimatedBlockDistance,
+            pixelX
+        );
+
+        return blockIsInsideAnyAvoidZone();
+    }
+
+    bool selectAllowedBlockClosestTo(int targetX, int targetY) {
+        int bestIndex = -1;
+        long bestDistanceSquared = 0;
+
+        for (int i = 0; i < jetson.block_count; i++) {
+            int candidateX = jetson.block_x_positions[i];
+            int candidateY = jetson.block_y_positions[i];
+
+            if (candidateX < 0 || candidateY < 0) {
+                continue;
+            }
+
+            if (candidateBlockIsInsideAvoidZone(candidateX, candidateY)) {
+                continue;
+            }
+
+            long dx = candidateX - targetX;
+            long dy = candidateY - targetY;
+            long distanceSquared = dx * dx + dy * dy;
+
+            if (bestIndex < 0 || distanceSquared < bestDistanceSquared) {
+                bestIndex = i;
+                bestDistanceSquared = distanceSquared;
+            }
+        }
+
+        if (bestIndex < 0) {
+            jetson.block_x_pos = -1;
+            jetson.block_y_pos = -1;
+            return false;
+        }
+
+        jetson.block_x_pos = jetson.block_x_positions[bestIndex];
+        jetson.block_y_pos = jetson.block_y_positions[bestIndex];
+        return true;
+    }
+
+    bool updateAllowedTrackingLostFrame() {
+        TrackBlockRawVar& var = jetson.trackBlockRawVar;
+        TrackBlockRawConfig& conf = trackingConfig;
+
+        var.lostFrameCount++;
+        var.targetVisible = false;
+
+        if (var.lostFrameCount > conf.maxLostFrames) {
+            var.trackingLocked = false;
+
+            var.xError = 0;
+            var.yError = 0;
+
+            var.xJump = 0;
+            var.yJump = 0;
+
+            var.xJumpValid = false;
+            var.yJumpValid = false;
+
+            return false;
+        }
+
+        return var.trackingLocked;
+    }
+
+    bool trackAllowedBlockRawStep() {
+        TrackBlockRawVar& var = jetson.trackBlockRawVar;
+        TrackBlockRawConfig& conf = trackingConfig;
+
+        jetson.update_block_pose();
+
+        if (jetson.block_count <= 0) {
+            return updateAllowedTrackingLostFrame();
+        }
+
+        int targetX =
+            var.lastBlockXPos >= 0 ?
+            var.lastBlockXPos :
+            conf.cameraCenterX;
+
+        int targetY =
+            var.lastBlockYPos >= 0 ?
+            var.lastBlockYPos :
+            conf.cameraCenterY;
+
+        if (!selectAllowedBlockClosestTo(targetX, targetY)) {
+            return updateAllowedTrackingLostFrame();
+        }
+
+        var.targetVisible = true;
+
+        if (!var.trackingLocked) {
+            var.lastBlockXPos = jetson.block_x_pos;
+            var.lastBlockYPos = jetson.block_y_pos;
+
+            var.xJump = 0;
+            var.yJump = 0;
+
+            var.xJumpValid = true;
+            var.yJumpValid = true;
+
+            var.xError = jetson.block_x_pos - conf.cameraCenterX;
+            var.yError = conf.cameraCenterY - jetson.block_y_pos;
+
+            var.lostFrameCount = 0;
+            var.trackingLocked = true;
+            var.targetVisible = true;
+
+            return true;
+        }
+
+        var.xJump = jetson.block_x_pos - var.lastBlockXPos;
+        var.yJump = jetson.block_y_pos - var.lastBlockYPos;
+
+        var.xJumpValid =
+            std::abs(var.xJump) <= conf.maxTrackingXJump;
+
+        var.yJumpValid =
+            std::abs(var.yJump) <= conf.maxTrackingYJump;
+
+        if (!var.xJumpValid || !var.yJumpValid) {
+            return updateAllowedTrackingLostFrame();
+        }
+
+        var.lastBlockXPos = jetson.block_x_pos;
+        var.lastBlockYPos = jetson.block_y_pos;
+
+        var.xError = jetson.block_x_pos - conf.cameraCenterX;
+        var.yError = conf.cameraCenterY - jetson.block_y_pos;
+
+        var.lostFrameCount = 0;
+        var.trackingLocked = true;
+        var.targetVisible = true;
+
+        return true;
     }
 
     void resetStuckMonitor() {
@@ -573,6 +724,7 @@ public:
     }
 
     void initialize() override {
+        setCommandStatus("Track Block");
         finished = false;
         trackingValid = false;
 
@@ -621,9 +773,9 @@ public:
             return;
         }
 
-        trackingValid = jetson.track_block_raw_step();
+        trackingValid = trackAllowedBlockRawStep();
 
-        if (!trackingValid) {
+        if (!trackingValid || !jetson.trackBlockRawVar.targetVisible) {
             droppedTrackingFrameCount++;
             drivetrain.set_drive_power(0, 0);
 

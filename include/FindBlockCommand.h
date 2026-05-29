@@ -327,6 +327,7 @@
 #include "Drivetrain.h"
 #include "PositionTracking.h"
 #include "FieldAvoidZone.h"
+#include "CommandStatus.h"
 
 #include <cmath>
 
@@ -338,6 +339,7 @@ struct findingBlocksConfig {
     // Anti-stuck movement speeds
     float reverseSpeed;
     float forwardSpeed;
+    float turnSpeed;
 
     // How often to check if the robot is stuck, in milliseconds
     float stuckCheckTime;
@@ -356,7 +358,7 @@ struct findingBlocksConfig {
     float cameraHorizontalFovDegrees;
 
     // Field rectangles to avoid
-    FieldAvoidZone avoidZones[3];
+    FieldAvoidZone avoidZones[9];
 
     // How long to turn away from an avoided block, in milliseconds
     float avoidTurnTime;
@@ -425,6 +427,7 @@ private:
     float estimatedBlockFieldX;
     float estimatedBlockFieldY;
 
+    bool runningSearchUnstuck;
     bool avoidingRejectedBlock;
     float avoidEndTime;
 
@@ -515,7 +518,7 @@ private:
     }
 
     bool blockIsInsideAnyAvoidZone() {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 9; i++) {
             if (pointInsideAvoidZone(
                     estimatedBlockFieldX,
                     estimatedBlockFieldY,
@@ -675,6 +678,103 @@ private:
         return var.sequentialBlocksCount >= conf.numSequentialBlocks;
     }
 
+    bool updateAllowedTrackingLostFrame() {
+        TrackBlockRawVar& var = jetson.trackBlockRawVar;
+        TrackBlockRawConfig& conf = trackingConfig;
+
+        var.lostFrameCount++;
+        var.targetVisible = false;
+
+        if (var.lostFrameCount > conf.maxLostFrames) {
+            var.trackingLocked = false;
+
+            var.xError = 0;
+            var.yError = 0;
+
+            var.xJump = 0;
+            var.yJump = 0;
+
+            var.xJumpValid = false;
+            var.yJumpValid = false;
+
+            return false;
+        }
+
+        return var.trackingLocked;
+    }
+
+    bool trackAllowedBlockRawStep() {
+        TrackBlockRawVar& var = jetson.trackBlockRawVar;
+        TrackBlockRawConfig& conf = trackingConfig;
+
+        jetson.update_block_pose();
+
+        if (jetson.block_count <= 0) {
+            return updateAllowedTrackingLostFrame();
+        }
+
+        int targetX =
+            var.lastBlockXPos >= 0 ?
+            var.lastBlockXPos :
+            conf.cameraCenterX;
+
+        int targetY =
+            var.lastBlockYPos >= 0 ?
+            var.lastBlockYPos :
+            conf.cameraCenterY;
+
+        if (!selectAllowedBlockClosestTo(targetX, targetY)) {
+            return updateAllowedTrackingLostFrame();
+        }
+
+        var.targetVisible = true;
+
+        if (!var.trackingLocked) {
+            var.lastBlockXPos = jetson.block_x_pos;
+            var.lastBlockYPos = jetson.block_y_pos;
+
+            var.xJump = 0;
+            var.yJump = 0;
+
+            var.xJumpValid = true;
+            var.yJumpValid = true;
+
+            var.xError = jetson.block_x_pos - conf.cameraCenterX;
+            var.yError = conf.cameraCenterY - jetson.block_y_pos;
+
+            var.lostFrameCount = 0;
+            var.trackingLocked = true;
+            var.targetVisible = true;
+
+            return true;
+        }
+
+        var.xJump = jetson.block_x_pos - var.lastBlockXPos;
+        var.yJump = jetson.block_y_pos - var.lastBlockYPos;
+
+        var.xJumpValid =
+            std::abs(var.xJump) <= conf.maxTrackingXJump;
+
+        var.yJumpValid =
+            std::abs(var.yJump) <= conf.maxTrackingYJump;
+
+        if (!var.xJumpValid || !var.yJumpValid) {
+            return updateAllowedTrackingLostFrame();
+        }
+
+        var.lastBlockXPos = jetson.block_x_pos;
+        var.lastBlockYPos = jetson.block_y_pos;
+
+        var.xError = jetson.block_x_pos - conf.cameraCenterX;
+        var.yError = conf.cameraCenterY - jetson.block_y_pos;
+
+        var.lostFrameCount = 0;
+        var.trackingLocked = true;
+        var.targetVisible = true;
+
+        return true;
+    }
+
     void resetCenteringStuckMonitor() {
         lastCenteringCheckTime = master_timer.time(msec);
         lastCenteringHeading = drivetrain.get_heading_degrees();
@@ -693,13 +793,24 @@ private:
         }
         else {
             currentSearchMovement = SEARCH_FORWARD_RIGHT;
+            runningSearchUnstuck = false;
+            setCommandStatus("Find Block");
         }
 
         resetStuckMonitor();
     }
 
+    void startSearchUnstuck() {
+        setCommandStatus("Find Block Unstuck");
+        runningSearchUnstuck = true;
+        currentSearchMovement = SEARCH_FORWARD_RIGHT;
+        resetStuckMonitor();
+    }
+
     void startAvoidingRejectedBlock() {
+        setCommandStatus("Avoid Rejected Block");
         avoidingRejectedBlock = true;
+        runningSearchUnstuck = true;
         avoidEndTime = master_timer.time(msec) + config.avoidTurnTime;
 
         // Back away from the rejected block while curving left.
@@ -713,6 +824,7 @@ private:
 
         currentState = SEARCHING_FOR_BLOCK;
         currentSearchMovement = SEARCH_FORWARD_RIGHT;
+        runningSearchUnstuck = false;
 
         drivetrain.set_drive_power(0, 0);
 
@@ -723,34 +835,61 @@ private:
     }
 
     void applySearchMovement() {
+        if (!runningSearchUnstuck) {
+            drivetrain.set_drive_power(config.searchSpeed, -config.searchSpeed);
+            return;
+        }
+
         if (currentSearchMovement == SEARCH_FORWARD_RIGHT) {
             drivetrain.set_drive_power(
-                config.forwardSpeed + config.searchSpeed,
-                config.forwardSpeed - config.searchSpeed
+                config.forwardSpeed + config.turnSpeed,
+                config.forwardSpeed - config.turnSpeed
             );
         }
         else if (currentSearchMovement == SEARCH_FORWARD_LEFT) {
             drivetrain.set_drive_power(
-                config.forwardSpeed - config.searchSpeed,
-                config.forwardSpeed + config.searchSpeed
+                config.forwardSpeed - config.turnSpeed,
+                config.forwardSpeed + config.turnSpeed
             );
         }
         else if (currentSearchMovement == SEARCH_BACK_RIGHT) {
             drivetrain.set_drive_power(
-                -config.reverseSpeed + config.searchSpeed,
-                -config.reverseSpeed - config.searchSpeed
+                -config.reverseSpeed + config.turnSpeed,
+                -config.reverseSpeed - config.turnSpeed
             );
         }
         else if (currentSearchMovement == SEARCH_BACK_LEFT) {
             drivetrain.set_drive_power(
-                -config.reverseSpeed - config.searchSpeed,
-                -config.reverseSpeed + config.searchSpeed
+                -config.reverseSpeed - config.turnSpeed,
+                -config.reverseSpeed + config.turnSpeed
             );
         }
     }
 
     void updateStuckDetection() {
         float now = master_timer.time(msec);
+
+        if (!runningSearchUnstuck) {
+            if (now - lastStuckCheckTime < config.stuckCheckTime) {
+                return;
+            }
+
+            float currentHeading = drivetrain.get_heading_degrees();
+            float headingChange = getHeadingChange(currentHeading, lastHeading);
+
+            bool headingMoved =
+                std::fabs(headingChange) >= config.stuckHeadingChangeThreshold;
+
+            if (!headingMoved) {
+                startSearchUnstuck();
+                return;
+            }
+
+            lastStuckCheckTime = now;
+            lastHeading = currentHeading;
+            lastEncoderPosition = drivetrain.get_left_front_motor_position();
+            return;
+        }
 
         float movementElapsed = now - movementStartTime;
 
@@ -772,32 +911,9 @@ private:
             return;
         }
 
-        if (now - lastStuckCheckTime < config.stuckCheckTime) {
-            return;
-        }
-
-        float currentHeading = drivetrain.get_heading_degrees();
-        float currentEncoderPosition = drivetrain.get_left_front_motor_position();
-
-        float headingChange = getHeadingChange(currentHeading, lastHeading);
-        float encoderChange = currentEncoderPosition - lastEncoderPosition;
-
-        bool headingMoved =
-            std::fabs(headingChange) >= config.stuckHeadingChangeThreshold;
-
-        bool encoderMoved =
-            std::fabs(encoderChange) >= config.stuckEncoderChangeThreshold;
-
-        bool madeProgress = headingMoved || encoderMoved;
-
-        if (!madeProgress) {
-            goToNextSearchMovement();
-            return;
-        }
-
         lastStuckCheckTime = now;
-        lastHeading = currentHeading;
-        lastEncoderPosition = currentEncoderPosition;
+        lastHeading = drivetrain.get_heading_degrees();
+        lastEncoderPosition = drivetrain.get_left_front_motor_position();
     }
 
     bool centeringMadeProgress(float angularSpeed) {
@@ -876,16 +992,19 @@ public:
           estimatedBlockDistance(0),
           estimatedBlockFieldX(0),
           estimatedBlockFieldY(0),
+          runningSearchUnstuck(false),
           avoidingRejectedBlock(false),
           avoidEndTime(0)
     {
     }
 
     void initialize() override {
+        setCommandStatus("Find Block");
         finished = false;
 
         currentState = SEARCHING_FOR_BLOCK;
         currentSearchMovement = SEARCH_FORWARD_RIGHT;
+        runningSearchUnstuck = false;
 
         jetson.find_block_raw_init(findingConfig);
 
@@ -924,6 +1043,8 @@ public:
 
                 if (now >= avoidEndTime) {
                     avoidingRejectedBlock = false;
+                    runningSearchUnstuck = false;
+                    setCommandStatus("Find Block");
                     jetson.find_block_raw_init(findingConfig);
                     resetStuckMonitor();
                 }
@@ -942,7 +1063,8 @@ public:
             if (currentBlockIsInsideAvoidZone()) {
                 jetson.find_block_raw_init(findingConfig);
                 currentState = SEARCHING_FOR_BLOCK;
-                startAvoidingRejectedBlock();
+                runningSearchUnstuck = false;
+                resetStuckMonitor();
                 return;
             }
 
@@ -956,9 +1078,9 @@ public:
         }
 
         else if (currentState == CENTERING_BLOCK) {
-            trackingValid = jetson.track_block_raw_step();
+            trackingValid = trackAllowedBlockRawStep();
 
-            if (!trackingValid) {
+            if (!trackingValid || !jetson.trackBlockRawVar.targetVisible) {
                 centeringDroppedFrameCount++;
 
                 if (centeringDroppedFrameCount <= config.maxCenteringDroppedFrames) {
@@ -1012,7 +1134,8 @@ public:
                 jetson.find_block_raw_init(findingConfig);
 
                 currentState = SEARCHING_FOR_BLOCK;
-                startAvoidingRejectedBlock();
+                runningSearchUnstuck = false;
+                resetStuckMonitor();
 
                 centeringDroppedFrameCount = 0;
                 lastCenteringCheckTime = 0;

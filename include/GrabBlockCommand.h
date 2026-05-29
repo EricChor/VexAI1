@@ -5,6 +5,7 @@
 #include "Intake.h"
 #include "RobotConfig.h"
 #include "UnstuckArcHelper.h"
+#include "CommandStatus.h"
 
 struct GrabBlockTarget{
     float target_distance;
@@ -77,6 +78,7 @@ class GrabBlockCommand : public Command{
         {}
 
         void initialize() override{
+            setCommandStatus("Grab Block");
             finished = false;
     
             GrabBlockVar& var = grabBlockVar;

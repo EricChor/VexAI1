@@ -3,6 +3,7 @@
 #include "Command.h"
 #include "Intake.h"
 #include "RobotConfig.h"
+#include "CommandStatus.h"
 
 enum WaitAndScoreMode {
     SCORE_HIGH,
@@ -46,6 +47,7 @@ public:
     }
 
     void initialize() override {
+        setCommandStatus("Wait And Score");
         finished = false;
         scoring = false;
 

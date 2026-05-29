@@ -5,6 +5,7 @@
 #include "DriveToPointCommand.h"
 #include "PositionTracking.h"
 #include "RobotConfig.h"
+#include "CommandStatus.h"
 
 #include <cmath>
 
@@ -136,6 +137,10 @@ private:
         const float PI = 3.14159265f;
         targetHeading =
             normalizeHeading(std::atan2(xError, yError) * 180.0f / PI);
+
+        if (config.drive_direction == DRIVE_TO_POINT_DRIVE_BACKWARD) {
+            targetHeading = normalizeHeading(targetHeading + 180.0f);
+        }
 
         distanceError = std::sqrt(xError * xError + yError * yError);
         headingErrorValue =
@@ -388,7 +393,13 @@ private:
                 );
         }
 
-        return clamp(linearSpeed, config.max_linear_speed);
+        linearSpeed = clamp(linearSpeed, config.max_linear_speed);
+
+        if (config.drive_direction == DRIVE_TO_POINT_DRIVE_BACKWARD) {
+            linearSpeed *= -1.0f;
+        }
+
+        return linearSpeed;
     }
 
     bool crossedExitLine() {
@@ -437,6 +448,7 @@ public:
     }
 
     void initialize() override {
+        setCommandStatus("Drive To Point Until Y");
         currentState = DRIVE_TO_POINT_POINTING;
 
         finished = false;

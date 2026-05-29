@@ -5,6 +5,7 @@
 #include "PositionTracking.h"
 #include "RobotConfig.h"
 #include "UnstuckArcHelper.h"
+#include "CommandStatus.h"
 
 #include <cmath>
 
@@ -117,6 +118,7 @@ public:
     }
 
     void initialize() override {
+        setCommandStatus("Drive To X Position");
         finished = false;
         thresholdTimerSet = false;
         atTarget = false;

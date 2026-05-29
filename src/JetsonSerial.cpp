@@ -258,6 +258,7 @@
 #include "JetsonSerial.h"
 #include <stdio.h>
 #include "RobotConfig.h"
+#include "CommandStatus.h"
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
@@ -697,7 +698,10 @@ void JetsonSerial::print_block_pos_on_screen(){
     Brain.Screen.print("Visible: %d    ", trackBlockRawVar.targetVisible);
 
     Brain.Screen.setCursor(7, 1);
-    Brain.Screen.print("Locked: %d    ", trackBlockRawVar.trackingLocked);
+    Brain.Screen.print(
+        "Wall Dist: %.2f        ",
+        getLastWallAlignmentDistance()
+    );
 
     Brain.Screen.setCursor(8, 1);
     Brain.Screen.print("GPS X: %.2f    ", positionTracking.get_x());
@@ -710,4 +714,7 @@ void JetsonSerial::print_block_pos_on_screen(){
 
     Brain.Screen.setCursor(11, 1);
     Brain.Screen.print("IMU H: %.2f    ", drivebase.get_heading_degrees());
+
+    Brain.Screen.setCursor(12, 1);
+    Brain.Screen.print("Cmd: %s                    ", getCommandStatus());
 }

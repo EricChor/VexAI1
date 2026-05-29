@@ -1,6 +1,7 @@
 #include "Drivetrain.h"
 #include "RobotConfig.h"
 #include <iostream>
+#include <cmath>
 
 Pose Drivetrain::get_pose() const{
     return pose;
@@ -36,6 +37,18 @@ void Drivetrain::set_odom_pose(float x, float y, float theta) {
 }
 
 void Drivetrain::set_heading_degrees(float theta) {
+    if (!std::isfinite(theta)) {
+        return;
+    }
+
+    while (theta >= 360.0f) {
+        theta -= 360.0f;
+    }
+
+    while (theta < 0.0f) {
+        theta += 360.0f;
+    }
+
     drivetrain_inertial.setHeading(theta, degrees);
 }
 

@@ -5,6 +5,7 @@
 #include "PositionTracking.h"
 #include "RobotConfig.h"
 #include "UnstuckArcHelper.h"
+#include "CommandStatus.h"
 
 #include <cmath>
 
@@ -59,6 +60,9 @@ struct WallAlignmentVar {
     bool threshold_timer_set;
     bool at_target;
     bool timed_out;
+    bool left_sensor_detected;
+    bool right_sensor_detected;
+    bool wall_detected;
 };
 
 class WallAlignmentCommand : public Command {
@@ -167,6 +171,7 @@ public:
     }
 
     void initialize() override {
+        setCommandStatus("Wall Alignment");
         finished = false;
 
         var.end_time = master_timer.time(msec) + config.max_time;
@@ -203,6 +208,9 @@ public:
         var.threshold_timer_set = false;
         var.at_target = false;
         var.timed_out = false;
+        var.left_sensor_detected = false;
+        var.right_sensor_detected = false;
+        var.wall_detected = false;
 
         unstuck.configure(config.unstuck);
         unstuck.initialize(drivetrain, std::fabs(target.target_distance));
@@ -218,10 +226,33 @@ public:
             var.angular_error - var.angular_previous_error;
         var.angular_previous_error = var.angular_error;
 
-        var.left_distance = leftDistanceSensor.objectDistance(inches);
-        var.right_distance = rightDistanceSensor.objectDistance(inches);
-        var.average_distance =
-            (var.left_distance + var.right_distance) / 2.0f;
+        var.left_sensor_detected = leftDistanceSensor.isObjectDetected();
+        var.right_sensor_detected = rightDistanceSensor.isObjectDetected();
+        var.wall_detected =
+            var.left_sensor_detected || var.right_sensor_detected;
+
+        if (var.left_sensor_detected) {
+            var.left_distance = leftDistanceSensor.objectDistance(inches);
+        }
+
+        if (var.right_sensor_detected) {
+            var.right_distance = rightDistanceSensor.objectDistance(inches);
+        }
+
+        if (var.left_sensor_detected && var.right_sensor_detected) {
+            var.average_distance =
+                (var.left_distance + var.right_distance) / 2.0f;
+        } else if (var.left_sensor_detected) {
+            var.average_distance = var.left_distance;
+        } else if (var.right_sensor_detected) {
+            var.average_distance = var.right_distance;
+        } else {
+            var.average_distance = target.target_distance;
+        }
+
+        if (var.wall_detected) {
+            setLastWallAlignmentDistance(var.average_distance);
+        }
 
         const float PI = 3.14159265f;
         float angularErrorRadians = var.angular_error * PI / 180.0f;
@@ -289,11 +320,16 @@ public:
 
         var.right_drive_linear_velocity = var.left_drive_linear_velocity;
 
+        if (!var.wall_detected) {
+            var.left_drive_linear_velocity = config.max_linear_speed;
+            var.right_drive_linear_velocity = config.max_linear_speed;
+        }
+
         bool headingTooFarForDistanceCorrection =
             config.max_linear_heading_error > 0.0f &&
             std::fabs(var.angular_error) > config.max_linear_heading_error;
 
-        if (headingTooFarForDistanceCorrection) {
+        if (headingTooFarForDistanceCorrection && var.wall_detected) {
             var.left_drive_linear_velocity = 0;
             var.right_drive_linear_velocity = 0;
         }
@@ -340,6 +376,7 @@ public:
         var.current_time = master_timer.time(msec);
 
         bool alignedToWall =
+            var.wall_detected &&
             std::fabs(var.linear_error) < config.acceptable_error &&
             std::fabs(var.angular_error) < config.heading_acceptable_error;
 

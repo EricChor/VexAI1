@@ -5,6 +5,7 @@
 #include "Drivetrain.h"
 #include "RobotConfig.h"
 #include "UnstuckArcHelper.h"
+#include "CommandStatus.h"
 
 
 struct InertialTurnTarget{
@@ -59,6 +60,7 @@ class InertialTurnCommand : public Command{
              finished(false) {}
         
         void initialize() override{
+            setCommandStatus("Inertial Turn");
             finished = false;
             InertialTurnVar& var = inertialTurnVar;
 

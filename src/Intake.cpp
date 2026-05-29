@@ -215,8 +215,7 @@ bool Intake::intake_with_sorting_step() {
 
     float intakeVelocity = fabs(initial_intake.velocity(pct));
 
-    if (var.accepting_correct_block &&
-        var.done_with_color_sorting &&
+    if (var.done_with_color_sorting &&
         intakeVelocity > conf.threshold_velocity) {
 
         var.threshold_velocity_passed = true;
@@ -225,8 +224,7 @@ bool Intake::intake_with_sorting_step() {
     if ((intakeVelocity < conf.threshold_velocity) &&
         (!var.unjamming_timer_set) &&
         (var.threshold_velocity_passed) &&
-        (var.done_with_color_sorting) &&
-        (var.accepting_correct_block)) {
+        (var.done_with_color_sorting)) {
 
         var.unjamming_end_time = now + conf.unjamming_time;
         var.unjamming_timer_set = true;
@@ -255,13 +253,13 @@ bool Intake::intake_with_sorting_step() {
         // Wrong color was detected, actively reject it
         color_sorting();
     }
+    else if (!var.done_with_jamming) {
+        // Intake appears jammed, regardless of whether a block is currently detected
+        unjamming();
+    }
     else if (!var.accepting_correct_block) {
         // Default state: reject/sort unless correct color has been detected
         color_sorting();
-    }
-    else if (!var.done_with_jamming) {
-        // Correct block is being accepted, but intake appears jammed
-        unjamming();
     }
     else {
         // Correct block was detected and accept timer is active

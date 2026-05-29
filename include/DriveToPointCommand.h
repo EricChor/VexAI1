@@ -4,12 +4,18 @@
 #include "Drivetrain.h"
 #include "PositionTracking.h"
 #include "RobotConfig.h"
+#include "CommandStatus.h"
 
 #include <cmath>
 
 struct DriveToPointTarget {
     float target_x;
     float target_y;
+};
+
+enum DriveToPointDriveDirection {
+    DRIVE_TO_POINT_DRIVE_FORWARD,
+    DRIVE_TO_POINT_DRIVE_BACKWARD
 };
 
 struct DriveToPointConfig {
@@ -32,6 +38,7 @@ struct DriveToPointConfig {
     float max_reverse_time;
     float max_turn_time;
     int max_unstuck_attempts;
+    DriveToPointDriveDirection drive_direction;
 };
 
 enum DriveToPointState {
@@ -177,6 +184,10 @@ private:
         const float PI = 3.14159265f;
         targetHeading =
             normalizeHeading(std::atan2(xError, yError) * 180.0f / PI);
+
+        if (config.drive_direction == DRIVE_TO_POINT_DRIVE_BACKWARD) {
+            targetHeading = normalizeHeading(targetHeading + 180.0f);
+        }
 
         distanceError = std::sqrt(xError * xError + yError * yError);
         headingErrorValue =
@@ -430,7 +441,13 @@ private:
                 );
         }
 
-        return clamp(linearSpeed, config.max_linear_speed);
+        linearSpeed = clamp(linearSpeed, config.max_linear_speed);
+
+        if (config.drive_direction == DRIVE_TO_POINT_DRIVE_BACKWARD) {
+            linearSpeed *= -1.0f;
+        }
+
+        return linearSpeed;
     }
 
 public:
@@ -473,6 +490,7 @@ public:
     }
 
     void initialize() override {
+        setCommandStatus("Drive To Point");
         currentState = DRIVE_TO_POINT_POINTING;
 
         finished = false;

@@ -4,6 +4,7 @@
 #include "Command.h"
 #include "Drivetrain.h"
 #include "UnstuckArcHelper.h"
+#include "CommandStatus.h"
 
 
 struct DriveStraightTarget{
@@ -69,6 +70,7 @@ class DriveStraightCommand : public Command{
              finished(false) {}
         
         void initialize() override{
+            setCommandStatus("Drive Straight");
             finished = false;
             DriveStraightVar& var = driveStraightVar;
 

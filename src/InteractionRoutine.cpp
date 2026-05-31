@@ -1,4 +1,4 @@
-#include "Routines.h"
+#include "InteractionRoutine.h"
 
 #include "RobotConfig.h"
 #include "Drivetrain.h"
@@ -27,111 +27,11 @@
 #include "SetBlocksBeforeScoringCommand.h"
 #include "InertialTurnCommand.h"
 
+#include "DoNothingCommand.h"
+#include "SetDrivetrainPoseFromGPSCommand.h"
+
 #include <cmath>
 
-
-// ------------------------------------------------------------
-// Simple skip command
-// ------------------------------------------------------------
-
-class DoNothingCommand : public Command {
-private:
-    bool finished;
-
-public:
-    DoNothingCommand()
-        : finished(false)
-    {
-    }
-
-    void initialize() override {
-        setCommandStatus("Skip");
-        finished = true;
-    }
-
-    void execute() override {
-    }
-
-    bool isFinished() override {
-        return finished;
-    }
-
-    void end() override {
-    }
-};
-
-// ------------------------------------------------------------
-// Set drivetrain pose from filtered GPS
-// ------------------------------------------------------------
-
-class SetDrivetrainPoseFromGPSCommand : public Command {
-private:
-    Drivetrain& drivetrain;
-    PositionTracking& positionTracking;
-    GetGPSCoordinatesFilteredCommand* gpsCommand;
-
-    bool finished;
-
-public:
-    SetDrivetrainPoseFromGPSCommand(
-        Drivetrain& drivetrain,
-        PositionTracking& positionTracking,
-        GetGPSCoordinatesFilteredCommand* gpsCommand = nullptr
-    )
-        : drivetrain(drivetrain),
-          positionTracking(positionTracking),
-          gpsCommand(gpsCommand),
-          finished(false)
-    {
-    }
-
-    void initialize() override {
-        setCommandStatus("Set Pose From GPS");
-        finished = false;
-
-        if (gpsCommand != nullptr && !gpsCommand->wasSuccessful()) {
-            setCommandStatus("GPS Filter Failed");
-            finished = true;
-            return;
-        }
-
-        GPSPose pose = positionTracking.getPose();
-
-        if (!std::isfinite(pose.x) ||
-            !std::isfinite(pose.y) ||
-            !std::isfinite(pose.heading)) {
-
-            setCommandStatus("GPS Pose Invalid");
-            finished = true;
-            return;
-        }
-
-        pose.heading = positionTracking.normalize_heading(pose.heading);
-
-        drivetrain.set_odom_pose(
-            pose.x,
-            pose.y,
-            pose.heading
-        );
-
-        setCommandStatus("Set Pose Done");
-        finished = true;
-    }
-
-    void execute() override {
-    }
-
-    bool isFinished() override {
-        return finished;
-    }
-
-    void end() override {
-    }
-};
-
-// ------------------------------------------------------------
-// Track-block success wrapper
-// ------------------------------------------------------------
 
 static TrackBlockCommand* trackBlockPtr = nullptr;
 
@@ -165,7 +65,7 @@ bool scoreTopRightApproachIsClose();
 // ------------------------------------------------------------
 
 SequentialCommandGroup AI_ROUTE_1;
-RepeatForeverCommandGroup AI_ROUTE_ONE(AI_ROUTE_1);
+RepeatForeverCommandGroup AI_INTERACTION_ROUTE(AI_ROUTE_1);
 
 // ------------------------------------------------------------
 // PID constants
@@ -1066,7 +966,7 @@ static ConditionalCommandGroup choose_score_corner(
 // Build routine
 // ------------------------------------------------------------
 
-void build_AI_routine() {
+void build_interaction_routine() {
     static bool built = false;
 
     if (built) {

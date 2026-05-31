@@ -52,3 +52,5 @@ extern PositionTracking positionTracking;
 extern vex::distance leftDistanceAligner;
 
 extern vex::distance rightDistanceAligner;
+
+extern vex::competition Competition;

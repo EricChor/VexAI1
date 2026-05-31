@@ -7,6 +7,6 @@
 #include "GrabBlockCommand.h"
 #include "RepeatForeverCommandGroup.h"
 
-extern RepeatForeverCommandGroup AI_ROUTE_ONE;
+extern SequentialCommandGroup AI_ISOLATION_ROUTE;
 
-extern void build_AI_routine();
+extern void build_isolation_routine();

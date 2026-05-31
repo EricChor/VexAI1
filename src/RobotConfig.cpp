@@ -43,3 +43,5 @@ gps GPSSensor (PORT5);
 vex::distance leftDistanceAligner (PORT17);
 
 vex::distance rightDistanceAligner (PORT6);
+
+vex::competition Competition;

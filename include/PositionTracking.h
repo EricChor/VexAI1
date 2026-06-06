@@ -12,7 +12,11 @@ struct GPSPose{
 class PositionTracking {
     private:
         vex::gps& GPSSensor;
+        vex::gps& GPSBackup;
         GPSPose gpsPose;
+        float backupToMainOffsetX;
+        float backupToMainOffsetY;
+        bool backupOffsetInitialized;
     public:
         PositionTracking();
 
@@ -23,6 +27,10 @@ class PositionTracking {
         float get_raw_y();
 
         float get_raw_heading();
+
+        float get_main_gps_quality();
+
+        float get_backup_gps_quality();
 
         void update_raw_pose();
 

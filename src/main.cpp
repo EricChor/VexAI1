@@ -9,6 +9,10 @@ using namespace vex;
 
 
 void isolationPeriod(){
+    scheduler.cancelAll();
+    drivebase.stop();
+    intake.stop();
+
     scheduler.schedule(&AI_ISOLATION_ROUTE);
     positionTracking.update_raw_pose();
     drivebase.set_odom_pose(
@@ -27,6 +31,10 @@ void isolationPeriod(){
 }
 
 void interactionPeriod(){
+    scheduler.cancelAll();
+    drivebase.stop();
+    intake.stop();
+
     scheduler.schedule(&AI_INTERACTION_ROUTE);
     positionTracking.update_raw_pose();
     drivebase.set_odom_pose(
@@ -51,7 +59,7 @@ int main() {
     
     build_interaction_routine();
     build_isolation_routine();
-    while(drivetrain_inertial.isCalibrating() || GPSSensor.isCalibrating()){
+    while(drivetrain_inertial.isCalibrating() || GPSSensor.isCalibrating() || GPSBackup.isCalibrating()){
         vex::task::sleep(10);
     }
 
@@ -60,4 +68,3 @@ int main() {
     Competition.drivercontrol(interactionPeriod);
 
 }
-

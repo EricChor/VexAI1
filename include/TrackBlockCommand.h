@@ -1,151 +1,3 @@
-// #pragma once
-
-// #include "Command.h"
-// #include "JetsonSerial.h"
-// #include "Drivetrain.h"
-
-// struct TrackingBlocksConfig{
-//     int acceptableYError;
-//     int acceptableXError;
-
-//     float maxLinearSpeed;
-//     float maxAngularSpeed;
-// };
-
-// class TrackBlockCommand : public Command{
-//     private:
-//         Drivetrain& drivetrain;
-//         JetsonSerial& jetson;
-
-//         TrackBlockRawConfig trackingConfig;
-//         TrackingBlocksConfig config;
-
-//         DrivePID PID;
-
-//         bool finished;
-
-//         bool trackingValid;
-
-//         int xError;
-//         int xPrevError;
-//         int xDerivativeError;
-
-//         int yError;
-//         int yPrevError;
-//         int yDerivativeError;
-
-//         float xIntegralError;
-//         float yIntegralError;
-
-//         float linearSpeed;
-//         float angularSpeed;
-
-//         bool xCentered;
-//         bool yCloseEnough;
-
-//     public:
-//         TrackBlockCommand(Drivetrain& drivetrain, JetsonSerial& jetson, TrackingBlocksConfig config, TrackBlockRawConfig trackingConfig, DrivePID PID)
-//         :drivetrain(drivetrain),
-//          jetson(jetson),
-//          config(config),
-//          trackingConfig(trackingConfig),
-//          PID(PID)
-//         {}
-
-//         void initialize() override{
-//             finished = false;
-//             trackingValid = false;
-
-//             xError = 0;
-//             xPrevError = 0;
-//             xDerivativeError = 0;
-
-//             yError = 0;
-//             yPrevError = 0;
-//             yDerivativeError = 0;
-
-//             xIntegralError = 0;
-//             yIntegralError = 0;
-
-//             linearSpeed = 0;
-//             angularSpeed = 0;
-            
-//             xCentered = false;
-//             yCloseEnough = false;
-
-//             jetson.track_block_raw_init(trackingConfig);
-//         }
-
-//         void execute() override{
-//             trackingValid = jetson.track_block_raw_step();
-
-//             if(!trackingValid){
-//                 drivetrain.set_drive_power(0,0);
-//                 finished = true;
-//                 return;
-//             }
-
-//             xError = jetson.getXError();
-//             xDerivativeError = xError - xPrevError;
-//             if(abs(xError) <= PID.angular_integral_windup_threshold){
-//                 xIntegralError += xError;
-//             } else {
-//                 xIntegralError = 0;
-//             }
-
-
-//             angularSpeed = PID.angular_kP * xError + PID.angular_kI * xIntegralError + PID.angular_kD * xDerivativeError;
-//             if(fabs(angularSpeed) > config.maxAngularSpeed){
-//                 if(angularSpeed > 0){
-//                     angularSpeed = config.maxAngularSpeed;
-//                 } else {
-//                     angularSpeed = -config.maxAngularSpeed;
-//                 }
-//             }
-
-
-//             yError = jetson.getYError();
-//             yDerivativeError = yError - yPrevError;
-//             if(abs(yError) <= PID.linear_integral_windup_threshold){
-//                 yIntegralError += yError;
-//             } else {
-//                 yIntegralError = 0;
-//             }
-
-//             linearSpeed = PID.linear_kP * yError + PID.linear_kI * yIntegralError + PID.linear_kD * yDerivativeError;
-
-//             if(fabs(linearSpeed) > config.maxLinearSpeed){
-//                 if(linearSpeed > 0){
-//                     linearSpeed = config.maxLinearSpeed;
-//                 } else {
-//                     linearSpeed = -config.maxLinearSpeed;
-//                 }
-//             }
-
-//             xPrevError = xError;
-//             yPrevError = yError;
-
-//             drivetrain.set_drive_power(linearSpeed + angularSpeed, linearSpeed - angularSpeed);
-
-//             xCentered = abs(xError) <= config.acceptableXError;
-//             yCloseEnough = abs(yError) <= config.acceptableYError;
-
-//             if(xCentered && yCloseEnough){
-//                 drivetrain.set_drive_power(0,0);
-//                 finished = true;
-//             }
-
-//         }
-
-//         bool isFinished() override{
-//             return finished;
-//         }
-
-//         void end() override{
-//             drivetrain.set_drive_power(0,0);
-//         }
-// };
-
 #pragma once
 
 #include "Command.h"
@@ -155,6 +7,7 @@
 #include "PositionTracking.h"
 #include "FieldAvoidZone.h"
 #include "CommandStatus.h"
+#include "RandomUnstuckOrder.h"
 
 #include <cmath>
 
@@ -249,6 +102,7 @@ private:
     float lastStuckCheckTime;
     float unstuckStartTime;
     int unstuckAttemptCount;
+    RandomUnstuckOrder unstuckOrder;
 
     float lastHeading;
     float lastEncoderPosition;
@@ -544,6 +398,36 @@ private:
         lastProgressYError = yError;
     }
 
+    TrackBlockState stateFromUnstuckMove(int move) {
+        if (move == RANDOM_UNSTUCK_FORWARD_RIGHT) {
+            return TRACKING_UNSTUCK_FORWARD_RIGHT;
+        }
+
+        if (move == RANDOM_UNSTUCK_FORWARD_LEFT) {
+            return TRACKING_UNSTUCK_FORWARD_LEFT;
+        }
+
+        if (move == RANDOM_UNSTUCK_BACK_RIGHT) {
+            return TRACKING_UNSTUCK_BACK_RIGHT;
+        }
+
+        return TRACKING_UNSTUCK_BACK_LEFT;
+    }
+
+    unsigned int makeUnstuckSeed() {
+        return
+            static_cast<unsigned int>(master_timer.time(msec)) ^
+            static_cast<unsigned int>(drivetrain.get_left_front_motor_position() * 31.0f) ^
+            static_cast<unsigned int>(drivetrain.get_heading_degrees() * 17.0f) ^
+            static_cast<unsigned int>(unstuckAttemptCount * 97);
+    }
+
+    void startCurrentUnstuckMovement() {
+        currentState = stateFromUnstuckMove(unstuckOrder.current());
+        unstuckStartTime = master_timer.time(msec);
+        resetStuckMonitor();
+    }
+
     void startUnstuckForwardRight() {
         if (unstuckAttemptCount >= config.maxUnstuckAttempts) {
             failStuck();
@@ -551,9 +435,8 @@ private:
         }
 
         unstuckAttemptCount++;
-        currentState = TRACKING_UNSTUCK_FORWARD_RIGHT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
+        unstuckOrder.reset(makeUnstuckSeed());
+        startCurrentUnstuckMovement();
     }
 
     void startUnstuckForwardLeft() {
@@ -637,45 +520,31 @@ private:
     void runUnstuckState() {
         float now = master_timer.time(msec);
         float elapsed = now - unstuckStartTime;
+        bool forwardArc =
+            currentState == TRACKING_UNSTUCK_FORWARD_RIGHT ||
+            currentState == TRACKING_UNSTUCK_FORWARD_LEFT;
+
+        float movementTime = forwardArc ? config.maxForwardTime : config.maxReverseTime;
 
         if (currentState == TRACKING_UNSTUCK_FORWARD_RIGHT) {
             applyUnstuckArc(config.forwardSpeed, config.turnSpeed);
-
-            if (elapsed >= config.maxForwardTime) {
-                startUnstuckForwardLeft();
-            }
-
-            return;
         }
-
-        if (currentState == TRACKING_UNSTUCK_FORWARD_LEFT) {
+        else if (currentState == TRACKING_UNSTUCK_FORWARD_LEFT) {
             applyUnstuckArc(config.forwardSpeed, -config.turnSpeed);
-
-            if (elapsed >= config.maxForwardTime) {
-                startUnstuckBackRight();
-            }
-
-            return;
         }
-
-        if (currentState == TRACKING_UNSTUCK_BACK_RIGHT) {
+        else if (currentState == TRACKING_UNSTUCK_BACK_RIGHT) {
             applyUnstuckArc(-config.reverseSpeed, config.turnSpeed);
-
-            if (elapsed >= config.maxReverseTime) {
-                startUnstuckBackLeft();
-            }
-
-            return;
+        }
+        else if (currentState == TRACKING_UNSTUCK_BACK_LEFT) {
+            applyUnstuckArc(-config.reverseSpeed, -config.turnSpeed);
         }
 
-        if (currentState == TRACKING_UNSTUCK_BACK_LEFT) {
-            applyUnstuckArc(-config.reverseSpeed, -config.turnSpeed);
-
-            if (elapsed >= config.maxReverseTime) {
+        if (elapsed >= movementTime) {
+            if (unstuckOrder.advance()) {
+                startCurrentUnstuckMovement();
+            } else {
                 returnToNormalTracking();
             }
-
-            return;
         }
     }
 
@@ -714,6 +583,7 @@ public:
           lastStuckCheckTime(0),
           unstuckStartTime(0),
           unstuckAttemptCount(0),
+          unstuckOrder(),
           lastHeading(0),
           lastEncoderPosition(0),
           estimatedBlockDistance(0),

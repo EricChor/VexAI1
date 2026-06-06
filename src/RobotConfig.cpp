@@ -40,8 +40,12 @@ PositionTracking positionTracking;
 
 gps GPSSensor (PORT5);
 
+gps GPSBackup (PORT12);
+
 vex::distance leftDistanceAligner (PORT17);
 
 vex::distance rightDistanceAligner (PORT6);
+
+digital_out loaderPiston(Brain.ThreeWirePort.A);
 
 vex::competition Competition;

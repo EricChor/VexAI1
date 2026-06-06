@@ -328,6 +328,7 @@
 #include "PositionTracking.h"
 #include "FieldAvoidZone.h"
 #include "CommandStatus.h"
+#include "RandomUnstuckOrder.h"
 
 #include <cmath>
 
@@ -430,6 +431,7 @@ private:
     bool runningSearchUnstuck;
     bool avoidingRejectedBlock;
     float avoidEndTime;
+    RandomUnstuckOrder searchUnstuckOrder;
 
 private:
     float getHeadingChange(float currentHeading, float previousHeading) {
@@ -781,30 +783,49 @@ private:
         lastCenteringXError = xError;
     }
 
+    searchMovementState searchMovementFromUnstuckMove(int move) {
+        if (move == RANDOM_UNSTUCK_FORWARD_RIGHT) {
+            return SEARCH_FORWARD_RIGHT;
+        }
+
+        if (move == RANDOM_UNSTUCK_FORWARD_LEFT) {
+            return SEARCH_FORWARD_LEFT;
+        }
+
+        if (move == RANDOM_UNSTUCK_BACK_RIGHT) {
+            return SEARCH_BACK_RIGHT;
+        }
+
+        return SEARCH_BACK_LEFT;
+    }
+
+    unsigned int makeSearchUnstuckSeed() {
+        return
+            static_cast<unsigned int>(master_timer.time(msec)) ^
+            static_cast<unsigned int>(drivetrain.get_left_front_motor_position() * 31.0f) ^
+            static_cast<unsigned int>(drivetrain.get_heading_degrees() * 17.0f);
+    }
+
+    void startCurrentSearchUnstuckMovement() {
+        currentSearchMovement = searchMovementFromUnstuckMove(searchUnstuckOrder.current());
+        resetStuckMonitor();
+    }
+
     void goToNextSearchMovement() {
-        if (currentSearchMovement == SEARCH_FORWARD_RIGHT) {
-            currentSearchMovement = SEARCH_FORWARD_LEFT;
-        }
-        else if (currentSearchMovement == SEARCH_FORWARD_LEFT) {
-            currentSearchMovement = SEARCH_BACK_RIGHT;
-        }
-        else if (currentSearchMovement == SEARCH_BACK_RIGHT) {
-            currentSearchMovement = SEARCH_BACK_LEFT;
-        }
-        else {
+        if (searchUnstuckOrder.advance()) {
+            startCurrentSearchUnstuckMovement();
+        } else {
             currentSearchMovement = SEARCH_FORWARD_RIGHT;
             runningSearchUnstuck = false;
             setCommandStatus("Find Block");
         }
-
-        resetStuckMonitor();
     }
 
     void startSearchUnstuck() {
         setCommandStatus("Find Block Unstuck");
         runningSearchUnstuck = true;
-        currentSearchMovement = SEARCH_FORWARD_RIGHT;
-        resetStuckMonitor();
+        searchUnstuckOrder.reset(makeSearchUnstuckSeed());
+        startCurrentSearchUnstuckMovement();
     }
 
     void startAvoidingRejectedBlock() {
@@ -994,7 +1015,8 @@ public:
           estimatedBlockFieldY(0),
           runningSearchUnstuck(false),
           avoidingRejectedBlock(false),
-          avoidEndTime(0)
+          avoidEndTime(0),
+          searchUnstuckOrder()
     {
     }
 

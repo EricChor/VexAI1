@@ -32,6 +32,22 @@
 
 #include <cmath>
 
+// ============================================================
+// Interaction routine file map
+// ============================================================
+//
+// 1. Condition helpers
+// 2. Exported route object
+// 3. PID constants
+// 4. Vision and intake configs
+// 5. Movement, scoring, and wall-alignment targets/configs
+// 6. Command instances
+// 7. Command groups and branch selectors
+// 8. Routine assembly
+
+// ------------------------------------------------------------
+// Condition helpers
+// ------------------------------------------------------------
 
 static TrackBlockCommand* trackBlockPtr = nullptr;
 
@@ -61,7 +77,7 @@ bool scoreTopLeftApproachIsClose();
 bool scoreTopRightApproachIsClose();
 
 // ------------------------------------------------------------
-// Main routine objects
+// Exported route object
 // ------------------------------------------------------------
 
 SequentialCommandGroup AI_ROUTE_1;
@@ -98,11 +114,11 @@ DrivePID grabBlockPID {
 };
 
 DrivePID DriveToPointPID{
-    .linear_kP = 0.65,
-    .linear_kI = 0.01,
-    .linear_kD = 0.05,
+    .linear_kP = 2,
+    .linear_kI = 0.0,
+    .linear_kD = 0.1,
 
-    .angular_kP = 0.4,
+    .angular_kP = 0.2,
     .angular_kI = 0.0,
     .angular_kD = 0.1,
 
@@ -129,7 +145,7 @@ DrivePID wallAlignmentPID {
     .linear_kI = 0.01,
     .linear_kD = 0.05,
 
-    .angular_kP = 0.4,
+    .angular_kP = 0.2,
     .angular_kI = 0.0,
     .angular_kD = 0.1,
 
@@ -138,7 +154,7 @@ DrivePID wallAlignmentPID {
 };
 
 // ------------------------------------------------------------
-// Raw Jetson vision configs
+// Vision configs
 // ------------------------------------------------------------
 
 FindBlockRawConfig findBlockRawConfig {
@@ -349,7 +365,7 @@ TrackingBlocksConfig trackBlockConfig {
 };
 
 // ------------------------------------------------------------
-// Intake command config
+// Intake config
 // ------------------------------------------------------------
 
 IntakeWithSortingConfig intakeSortingConfig {
@@ -406,8 +422,13 @@ InertialTurnTarget inertialTurnTargetRightScoring{
 };
 
 // ------------------------------------------------------------
-// Grab block config
+// Grab-block target/config
 // ------------------------------------------------------------
+
+GrabBlockTarget grabBlockTarget {
+    .target_distance = 10,
+    .target_heading = 0
+};
 
 GrabBlockConfig grabBlockConfig {
     .acceptable_error = 0.5,
@@ -429,13 +450,6 @@ GrabBlockConfig grabBlockConfig {
     }
 };
 
-GrabBlockTarget grabBlockTarget {
-    .target_distance = 10,
-    .target_heading = 0
-};
-
-
-
 // ------------------------------------------------------------
 // GPS config
 // ------------------------------------------------------------
@@ -448,8 +462,12 @@ GetGPSCoordinatesFilteredConfig gpsConfig {
     .sampleIntervals = 50
 };
 
+// ============================================================
+// Command instances
+// ============================================================
+
 // ------------------------------------------------------------
-// Commands
+// GPS and block collection commands
 // ------------------------------------------------------------
 
 static GetGPSCoordinatesFilteredCommand updateGPS(
@@ -500,6 +518,10 @@ static IntakeWithSorting intake_while_grabbing(
 );
 
 static DoNothingCommand skip_grab;
+
+// ------------------------------------------------------------
+// Scoring approach targets and retry checks
+// ------------------------------------------------------------
 
 DriveToPointUntilYTarget scoreBottomLeftTarget {
     .target_x = -48,
@@ -575,14 +597,18 @@ bool scoreTopRightApproachIsClose() {
     );
 }
 
+// ------------------------------------------------------------
+// Drive-to-point configs
+// ------------------------------------------------------------
+
 DriveToPointConfig pointConfig {
     .max_linear_speed = 30,
     .max_angular_speed = 25,
-    .position_acceptable_error = 2,
+    .position_acceptable_error = 3,
     .heading_acceptable_error = 3,
     .max_time = 10000,
     .pointing_settle_time = 150,
-    .position_settle_time = 200,
+    .position_settle_time = 0,
     .min_linear_speed = 8,
     .min_angular_speed = 8,
     .stuck_check_time = 750,
@@ -601,11 +627,11 @@ DriveToPointConfig pointConfig {
 DriveToPointConfig pointReverseConfig {
     .max_linear_speed = 30,
     .max_angular_speed = 25,
-    .position_acceptable_error = 2,
+    .position_acceptable_error = 3,
     .heading_acceptable_error = 3,
     .max_time = 10000,
     .pointing_settle_time = 150,
-    .position_settle_time = 200,
+    .position_settle_time = 0,
     .min_linear_speed = 8,
     .min_angular_speed = 8,
     .stuck_check_time = 750,
@@ -621,42 +647,50 @@ DriveToPointConfig pointReverseConfig {
     .drive_direction = DRIVE_TO_POINT_DRIVE_BACKWARD
 };
 
+// ------------------------------------------------------------
+// Reverse staging targets before driving into goals
+// ------------------------------------------------------------
+
 DriveToPointUntilXTarget scoreReverseBottomLeftTarget {
     .target_x = -36,
     .target_y = -48,
     .exit_x = -36,
-    .exit_direction = DRIVE_TO_POINT_EXIT_LEFT_OF_X
+    .exit_direction = DRIVE_TO_POINT_EXIT_RIGHT_OF_X
 };
 
 DriveToPointUntilXTarget scoreReverseBottomRightTarget {
     .target_x = 36,
     .target_y = -48,
     .exit_x = 36,
-    .exit_direction = DRIVE_TO_POINT_EXIT_RIGHT_OF_X
+    .exit_direction = DRIVE_TO_POINT_EXIT_LEFT_OF_X
 };
 
 DriveToPointUntilXTarget scoreReverseTopLeftTarget {
     .target_x = -36,
     .target_y = 48,
     .exit_x = -36,
-    .exit_direction = DRIVE_TO_POINT_EXIT_LEFT_OF_X
+    .exit_direction = DRIVE_TO_POINT_EXIT_RIGHT_OF_X
 };
 
 DriveToPointUntilXTarget scoreReverseTopRightTarget {
     .target_x = 36,
     .target_y = 48,
     .exit_x = 36,
-    .exit_direction = DRIVE_TO_POINT_EXIT_RIGHT_OF_X
+    .exit_direction = DRIVE_TO_POINT_EXIT_LEFT_OF_X
 };
+
+// ------------------------------------------------------------
+// Wall-alignment targets/config
+// ------------------------------------------------------------
 
 WallAlignmentTarget wallBottomTarget {
     .target_heading = 0,
-    .target_distance = 18
+    .target_distance = 16
 };
 
 WallAlignmentTarget wallTopTarget {
     .target_heading = 180,
-    .target_distance = 18
+    .target_distance = 16
 };
 
 WallAlignmentConfig wallConfig {
@@ -681,6 +715,10 @@ WallAlignmentConfig wallConfig {
     }
 };
 
+// ------------------------------------------------------------
+// Final drive into goal config/targets
+// ------------------------------------------------------------
+
 DriveStraightConfig driveIntoGoal{
     .acceptable_error = 1,
     .max_accel = 0,
@@ -703,6 +741,10 @@ DriveStraightTarget driveIntoGoalRightTarget{
     .target_heading = 90
 };
 
+// ------------------------------------------------------------
+// Score/intake count configs
+// ------------------------------------------------------------
+
 WaitAndScoreConfig scoreConfig {
     .wait_time = 250,
     .score_time = 3000,
@@ -718,6 +760,10 @@ BlocksBeforeScoringConfig resetBlocksAfterScoringConfig {
     .target_block_count = 0,
     .reset_count = true
 };
+
+// ------------------------------------------------------------
+// Scoring command instances
+// ------------------------------------------------------------
 
 static WaitAndScoreCommand wait_and_score(
     intake,
@@ -963,6 +1009,49 @@ static ConditionalCommandGroup choose_score_corner(
 );
 
 // ------------------------------------------------------------
+// Routine assembly helpers
+// ------------------------------------------------------------
+
+static void add_scoring_sequence(
+    SequentialCommandGroup& sequence,
+    Command* driveToScore,
+    Command* retryDriveIfNeeded,
+    Command* turnForWallAlignment,
+    Command* alignToWall,
+    Command* turnForScoring,
+    Command* reverseToScore,
+    Command* driveIntoGoal
+) {
+    sequence.addCommand(driveToScore);
+    sequence.addCommand(&updateGPS);
+    sequence.addCommand(&setPoseFromGPS);
+    sequence.addCommand(retryDriveIfNeeded);
+    sequence.addCommand(turnForWallAlignment);
+    sequence.addCommand(alignToWall);
+    sequence.addCommand(turnForScoring);
+    sequence.addCommand(reverseToScore);
+    sequence.addCommand(driveIntoGoal);
+    sequence.addCommand(&wait_and_score);
+    sequence.addCommand(&reset_blocks_after_scoring);
+}
+
+static void add_collection_and_scoring_loop() {
+    AI_ROUTE_1.addCommand(&set_blocks_before_scoring);
+
+    AI_ROUTE_1.addCommand(&updateGPS);
+    AI_ROUTE_1.addCommand(&setPoseFromGPS);
+
+    AI_ROUTE_1.addCommand(&find_block);
+
+    AI_ROUTE_1.addCommand(&updateGPS);
+    AI_ROUTE_1.addCommand(&setPoseFromGPS);
+
+    AI_ROUTE_1.addCommand(&track_and_intake);
+    AI_ROUTE_1.addCommand(&choose_grab_or_skip);
+    AI_ROUTE_1.addCommand(&choose_score_or_keep_collecting);
+}
+
+// ------------------------------------------------------------
 // Build routine
 // ------------------------------------------------------------
 
@@ -980,71 +1069,53 @@ void build_interaction_routine() {
     track_and_intake.addCommand(&intake_while_tracking);
     grab_and_intake.addCommand(&intake_while_grabbing);
 
-    score_bottom_left_sequence.addCommand(&drive_to_score_bottom_left);
-    score_bottom_left_sequence.addCommand(&updateGPS);
-    score_bottom_left_sequence.addCommand(&setPoseFromGPS);
-    score_bottom_left_sequence.addCommand(&retry_bottom_left_score_drive_if_needed);
-    score_bottom_left_sequence.addCommand(&turn_for_bottom_left_wall_alignment);
-    score_bottom_left_sequence.addCommand(&align_to_bottom_left_wall);
-    score_bottom_left_sequence.addCommand(&turn_for_left_scoring);
-    score_bottom_left_sequence.addCommand(&reverse_to_score_bottom_left);
-    score_bottom_left_sequence.addCommand(&drive_into_left_goal);
-    score_bottom_left_sequence.addCommand(&wait_and_score);
-    score_bottom_left_sequence.addCommand(&reset_blocks_after_scoring);
+    add_scoring_sequence(
+        score_bottom_left_sequence,
+        &drive_to_score_bottom_left,
+        &retry_bottom_left_score_drive_if_needed,
+        &turn_for_bottom_left_wall_alignment,
+        &align_to_bottom_left_wall,
+        &turn_for_left_scoring,
+        &reverse_to_score_bottom_left,
+        &drive_into_left_goal
+    );
 
-    score_bottom_right_sequence.addCommand(&drive_to_score_bottom_right);
-    score_bottom_right_sequence.addCommand(&updateGPS);
-    score_bottom_right_sequence.addCommand(&setPoseFromGPS);
-    score_bottom_right_sequence.addCommand(&retry_bottom_right_score_drive_if_needed);
-    score_bottom_right_sequence.addCommand(&turn_for_bottom_right_wall_alignment);
-    score_bottom_right_sequence.addCommand(&align_to_bottom_right_wall);
-    score_bottom_right_sequence.addCommand(&turn_for_right_scoring);
-    score_bottom_right_sequence.addCommand(&reverse_to_score_bottom_right);
-    score_bottom_right_sequence.addCommand(&drive_into_right_goal);
-    score_bottom_right_sequence.addCommand(&wait_and_score);
-    score_bottom_right_sequence.addCommand(&reset_blocks_after_scoring);
+    add_scoring_sequence(
+        score_bottom_right_sequence,
+        &drive_to_score_bottom_right,
+        &retry_bottom_right_score_drive_if_needed,
+        &turn_for_bottom_right_wall_alignment,
+        &align_to_bottom_right_wall,
+        &turn_for_right_scoring,
+        &reverse_to_score_bottom_right,
+        &drive_into_right_goal
+    );
 
-    score_top_left_sequence.addCommand(&drive_to_score_top_left);
-    score_top_left_sequence.addCommand(&updateGPS);
-    score_top_left_sequence.addCommand(&setPoseFromGPS);
-    score_top_left_sequence.addCommand(&retry_top_left_score_drive_if_needed);
-    score_top_left_sequence.addCommand(&turn_for_top_left_wall_alignment);
-    score_top_left_sequence.addCommand(&align_to_top_left_wall);
-    score_top_left_sequence.addCommand(&turn_for_left_scoring);
-    score_top_left_sequence.addCommand(&reverse_to_score_top_left);
-    score_top_left_sequence.addCommand(&drive_into_left_goal);
-    score_top_left_sequence.addCommand(&wait_and_score);
-    score_top_left_sequence.addCommand(&reset_blocks_after_scoring);
+    add_scoring_sequence(
+        score_top_left_sequence,
+        &drive_to_score_top_left,
+        &retry_top_left_score_drive_if_needed,
+        &turn_for_top_left_wall_alignment,
+        &align_to_top_left_wall,
+        &turn_for_left_scoring,
+        &reverse_to_score_top_left,
+        &drive_into_left_goal
+    );
 
-    score_top_right_sequence.addCommand(&drive_to_score_top_right);
-    score_top_right_sequence.addCommand(&updateGPS);
-    score_top_right_sequence.addCommand(&setPoseFromGPS);
-    score_top_right_sequence.addCommand(&retry_top_right_score_drive_if_needed);
-    score_top_right_sequence.addCommand(&turn_for_top_right_wall_alignment);
-    score_top_right_sequence.addCommand(&align_to_top_right_wall);
-    score_top_right_sequence.addCommand(&turn_for_right_scoring);
-    score_top_right_sequence.addCommand(&reverse_to_score_top_right);
-    score_top_right_sequence.addCommand(&drive_into_right_goal);
-    score_top_right_sequence.addCommand(&wait_and_score);
-    score_top_right_sequence.addCommand(&reset_blocks_after_scoring);
+    add_scoring_sequence(
+        score_top_right_sequence,
+        &drive_to_score_top_right,
+        &retry_top_right_score_drive_if_needed,
+        &turn_for_top_right_wall_alignment,
+        &align_to_top_right_wall,
+        &turn_for_right_scoring,
+        &reverse_to_score_top_right,
+        &drive_into_right_goal
+    );
 
     score_sequence.addCommand(&updateGPS);
     score_sequence.addCommand(&setPoseFromGPS);
     score_sequence.addCommand(&choose_score_corner);
 
-    AI_ROUTE_1.addCommand(&set_blocks_before_scoring);
-
-    AI_ROUTE_1.addCommand(&updateGPS);
-    AI_ROUTE_1.addCommand(&setPoseFromGPS);
-
-    AI_ROUTE_1.addCommand(&find_block);
-
-    AI_ROUTE_1.addCommand(&updateGPS);
-    AI_ROUTE_1.addCommand(&setPoseFromGPS);
-
-    AI_ROUTE_1.addCommand(&track_and_intake);
-
-    AI_ROUTE_1.addCommand(&choose_grab_or_skip);
-
-    AI_ROUTE_1.addCommand(&choose_score_or_keep_collecting);
+    add_collection_and_scoring_loop();
 }

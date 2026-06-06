@@ -5,6 +5,7 @@
 #include "PositionTracking.h"
 #include "RobotConfig.h"
 #include "CommandStatus.h"
+#include "RandomUnstuckOrder.h"
 
 #include <cmath>
 
@@ -87,6 +88,7 @@ private:
     float lastEncoderPosition;
     float unstuckStartTime;
     int unstuckAttemptCount;
+    RandomUnstuckOrder unstuckOrder;
 
     float normalizeHeading(float heading) {
         while (heading >= 360.0f) {
@@ -201,6 +203,36 @@ private:
         lastEncoderPosition = drivetrain.get_left_front_motor_position();
     }
 
+    DriveToPointState stateFromUnstuckMove(int move) {
+        if (move == RANDOM_UNSTUCK_FORWARD_RIGHT) {
+            return DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT;
+        }
+
+        if (move == RANDOM_UNSTUCK_FORWARD_LEFT) {
+            return DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT;
+        }
+
+        if (move == RANDOM_UNSTUCK_BACK_RIGHT) {
+            return DRIVE_TO_POINT_UNSTUCK_BACK_RIGHT;
+        }
+
+        return DRIVE_TO_POINT_UNSTUCK_BACK_LEFT;
+    }
+
+    unsigned int makeUnstuckSeed() {
+        return
+            static_cast<unsigned int>(master_timer.time(msec)) ^
+            static_cast<unsigned int>(drivetrain.get_left_front_motor_position() * 31.0f) ^
+            static_cast<unsigned int>(drivetrain.get_heading_degrees() * 17.0f) ^
+            static_cast<unsigned int>(unstuckAttemptCount * 97);
+    }
+
+    void startCurrentUnstuckMovement() {
+        currentState = stateFromUnstuckMove(unstuckOrder.current());
+        unstuckStartTime = master_timer.time(msec);
+        resetStuckMonitor();
+    }
+
     void startUnstuckForwardRight() {
         if (config.max_unstuck_attempts <= 0) {
             return;
@@ -214,9 +246,8 @@ private:
         }
 
         unstuckAttemptCount++;
-        currentState = DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
+        unstuckOrder.reset(makeUnstuckSeed());
+        startCurrentUnstuckMovement();
     }
 
     void startUnstuckForwardLeft() {
@@ -258,45 +289,31 @@ private:
     void runUnstuckState() {
         float now = master_timer.time(msec);
         float elapsed = now - unstuckStartTime;
+        bool forwardArc =
+            currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT ||
+            currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT;
+
+        float movementTime = forwardArc ? config.max_turn_time : config.max_reverse_time;
 
         if (currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT) {
             applyUnstuckArc(config.forward_speed, config.turn_speed);
-
-            if (elapsed >= config.max_turn_time) {
-                startUnstuckForwardLeft();
-            }
-
-            return;
         }
-
-        if (currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT) {
+        else if (currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT) {
             applyUnstuckArc(config.forward_speed, -config.turn_speed);
-
-            if (elapsed >= config.max_turn_time) {
-                startUnstuckBackRight();
-            }
-
-            return;
         }
-
-        if (currentState == DRIVE_TO_POINT_UNSTUCK_BACK_RIGHT) {
+        else if (currentState == DRIVE_TO_POINT_UNSTUCK_BACK_RIGHT) {
             applyUnstuckArc(-config.reverse_speed, config.turn_speed);
-
-            if (elapsed >= config.max_reverse_time) {
-                startUnstuckBackLeft();
-            }
-
-            return;
+        }
+        else if (currentState == DRIVE_TO_POINT_UNSTUCK_BACK_LEFT) {
+            applyUnstuckArc(-config.reverse_speed, -config.turn_speed);
         }
 
-        if (currentState == DRIVE_TO_POINT_UNSTUCK_BACK_LEFT) {
-            applyUnstuckArc(-config.reverse_speed, -config.turn_speed);
-
-            if (elapsed >= config.max_reverse_time) {
+        if (elapsed >= movementTime) {
+            if (unstuckOrder.advance()) {
+                startCurrentUnstuckMovement();
+            } else {
                 returnToPointing();
             }
-
-            return;
         }
     }
 
@@ -443,10 +460,6 @@ private:
 
         linearSpeed = clamp(linearSpeed, config.max_linear_speed);
 
-        if (config.drive_direction == DRIVE_TO_POINT_DRIVE_BACKWARD) {
-            linearSpeed *= -1.0f;
-        }
-
         return linearSpeed;
     }
 
@@ -485,7 +498,8 @@ public:
           lastHeadingError(0),
           lastEncoderPosition(0),
           unstuckStartTime(0),
-          unstuckAttemptCount(0)
+          unstuckAttemptCount(0),
+          unstuckOrder()
     {
     }
 

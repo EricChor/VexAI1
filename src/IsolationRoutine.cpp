@@ -24,6 +24,7 @@
 #include "WaitAndScoreCommand.h"
 #include "SetBlocksBeforeScoringCommand.h"
 #include "InertialTurnCommand.h"
+#include "ChangeLoaderStateCommand.h"
 
 #include "DoNothingCommand.h"
 #include "SetDrivetrainPoseFromGPSCommand.h"
@@ -32,26 +33,26 @@
 
 SequentialCommandGroup AI_ISOLATION_ROUTE;
 
-static ParallelDeadlineGroup FirstTowerAndIntake;
-
-DriveToPointTarget FirstTowerAndIntakeDriveTarget{
+static DriveToPointTarget FirstTowerAndIntakeDriveTarget{
     .target_x = 24,
     .target_y = 24
 };
 
-DriveToPointTarget SecondTowerAndIntakeDriveTarget{
-    .target_x = 48,
-    .target_y = 48
+static DriveToPointUntilYTarget SecondTowerAndIntakeDriveTarget{
+    .target_x = 43,
+    .target_y = 48,
+    .exit_y = 48,
+    .exit_direction = DRIVE_TO_POINT_EXIT_ABOVE_Y
 };
 
-DriveToPointConfig DriveToPointDefaultConfig{
+static DriveToPointConfig DriveToPointDefaultConfig{
     .max_linear_speed = 30,
     .max_angular_speed = 25,
-    .position_acceptable_error = 2,
+    .position_acceptable_error = 3,
     .heading_acceptable_error = 3,
     .max_time = 10000,
     .pointing_settle_time = 150,
-    .position_settle_time = 200,
+    .position_settle_time = 0,
     .min_linear_speed = 8,
     .min_angular_speed = 8,
     .stuck_check_time = 750,
@@ -67,12 +68,25 @@ DriveToPointConfig DriveToPointDefaultConfig{
     .drive_direction = DRIVE_TO_POINT_DRIVE_FORWARD
 };
 
-DrivePID defaultPID {
-    .linear_kP = 0.25,
+static DrivePID isolationDefaultPID {
+    .linear_kP = 2,
     .linear_kI = 0.0,
-    .linear_kD = 0.05,
+    .linear_kD = 0.1,
 
-    .angular_kP = 0.35,
+    .angular_kP = 0.2,
+    .angular_kI = 0.0,
+    .angular_kD = 0.15,
+
+    .angular_integral_windup_threshold = 20,
+    .linear_integral_windup_threshold = 20
+};
+
+static DrivePID isolationDriveToPointPID{
+    .linear_kP = 2,
+    .linear_kI = 0.0,
+    .linear_kD = 0.1,
+
+    .angular_kP = 0.2,
     .angular_kI = 0.0,
     .angular_kD = 0.1,
 
@@ -80,7 +94,20 @@ DrivePID defaultPID {
     .linear_integral_windup_threshold = 20
 };
 
-IntakeWithSortingConfig intakeSortingConfig {
+static DrivePID isolationDriveIntoGoalPID{
+    .linear_kP = 3,
+    .linear_kI = 0.0,
+    .linear_kD = 0.25,
+
+    .angular_kP = 0.05,
+    .angular_kI = 0.05,
+    .angular_kD = 0.1,
+
+    .angular_integral_windup_threshold = 15,
+    .linear_integral_windup_threshold = 15
+};
+
+static IntakeWithSortingConfig isolationIntakeSortingConfig {
     .initial_intake_velocity = 100,
     .middle_intake_velcoity = 100,
     .final_intake_velocity = 100,
@@ -98,11 +125,15 @@ IntakeWithSortingConfig intakeSortingConfig {
     .unjamming_time = 300
 };
 
-InertialTurnTarget turnForWallAlignmentTarget{
+static InertialTurnTarget isolationTurnForWallAlignmentTarget{
     .target_heading = 180
 };
 
-InertialTurnConfig inertialTurnConfig{
+static InertialTurnTarget isolationTurnForLoaderWallTarget{
+    .target_heading = 90
+};
+
+static InertialTurnConfig isolationInertialTurnConfig{
     .max_speed = 25,
     .max_time = 5000,
     .settle_error = 4,
@@ -121,12 +152,12 @@ InertialTurnConfig inertialTurnConfig{
     }
 };
 
-WallAlignmentTarget wallTopTarget {
+static WallAlignmentTarget isolationWallTopTarget {
     .target_heading = 180,
-    .target_distance = 18
+    .target_distance = 16
 };
 
-WallAlignmentConfig wallConfig {
+static WallAlignmentConfig isolationWallConfig {
     .max_linear_speed = 25,
     .max_angular_speed = 20,
     .acceptable_error = 0.5,
@@ -148,37 +179,139 @@ WallAlignmentConfig wallConfig {
     }
 };
 
+static DriveStraightConfig isolationDriveIntoLoaderWallConfig{
+    .max_linear_speed = 25,
+    .max_angular_speed = 20,
+    .acceptable_error = 1,
+    .max_time = 2000,
+    .max_accel = 0,
+    .settle_time = 100,
+    .unstuck = {
+        .max_attempts = 0
+    }
+};
+
+static DriveStraightTarget isolationDriveIntoLoaderWallTarget{
+    .target_distance = 30,
+    .target_heading = 90
+};
+
+static DriveToPointConfig isolationReverseToHighGoalConfig{
+    .max_linear_speed = 30,
+    .max_angular_speed = 25,
+    .position_acceptable_error = 2,
+    .heading_acceptable_error = 3,
+    .max_time = 10000,
+    .pointing_settle_time = 150,
+    .position_settle_time = 200,
+    .min_linear_speed = 8,
+    .min_angular_speed = 8,
+    .stuck_check_time = 750,
+    .stuck_distance_progress = 2,
+    .stuck_heading_progress = 3,
+    .stuck_encoder_change_threshold = 20,
+    .forward_speed = 20,
+    .reverse_speed = 20,
+    .turn_speed = 15,
+    .max_reverse_time = 500,
+    .max_turn_time = 300,
+    .max_unstuck_attempts = 1,
+    .drive_direction = DRIVE_TO_POINT_DRIVE_BACKWARD
+};
+
+static DriveToPointUntilXTarget isolationReverseToHighGoalTarget{
+    .target_x = 36,
+    .target_y = 48,
+    .exit_x = 36,
+    .exit_direction = DRIVE_TO_POINT_EXIT_LEFT_OF_X
+};
+
+static DriveStraightConfig isolationDriveIntoHighGoalConfig{
+    .max_linear_speed = 25,
+    .max_angular_speed = 25,
+    .acceptable_error = 1,
+    .max_time = 3000,
+    .max_accel = 0,
+    .settle_time = 250,
+    .unstuck = {
+        .max_attempts = 0
+    }
+};
+
+static DriveStraightTarget isolationDriveIntoHighGoalTarget{
+    .target_distance = -15,
+    .target_heading = 90
+};
+
+static WaitAndScoreConfig isolationScoreHighConfig{
+    .wait_time = 250,
+    .score_time = 3000,
+    .score_mode = SCORE_HIGH
+};
+
 /////////////////////////////////////////////////////////////////
 static DriveToPointCommand FirstTowerAndIntakeDriveCommand(drivebase,
     positionTracking,
     FirstTowerAndIntakeDriveTarget,
     DriveToPointDefaultConfig, 
-    defaultPID);
+    isolationDefaultPID);
 
-static DriveToPointCommand SecondTowerAndIntakeDriveCommand(drivebase,
+static DriveToPointUntilYCommand SecondTowerAndIntakeDriveCommand(drivebase,
     positionTracking,
     SecondTowerAndIntakeDriveTarget,
     DriveToPointDefaultConfig,
-    defaultPID);
+    isolationDefaultPID);
 
-static IntakeWithSorting defaultIntake(intake, intakeSortingConfig);
+static IntakeWithSorting defaultIntake(intake, isolationIntakeSortingConfig);
+static IntakeWithSorting intakeWhileLoading(intake, isolationIntakeSortingConfig);
 
-static InertialTurnCommand turnForWallAlignment(drivebase,turnForWallAlignmentTarget, inertialTurnConfig, defaultPID);
+static InertialTurnCommand turnForWallAlignment(drivebase,isolationTurnForWallAlignmentTarget, isolationInertialTurnConfig, isolationDefaultPID);
 
-static WallAlignmentCommand topWallAlignmentForLoading(drivebase,positionTracking, leftDistanceAligner,rightDistanceAligner,wallTopTarget,wallConfig,defaultPID);
+static WallAlignmentCommand topWallAlignmentForLoading(drivebase,positionTracking, leftDistanceAligner,rightDistanceAligner,isolationWallTopTarget,isolationWallConfig,isolationDefaultPID);
+
+static ChangeLoaderStateCommand lowerLoader(loaderPiston, false);
+
+static InertialTurnCommand turnForLoaderWall(drivebase,isolationTurnForLoaderWallTarget, isolationInertialTurnConfig, isolationDefaultPID);
+
+static DriveStraightCommand driveIntoLoaderWall(drivebase, isolationDriveIntoLoaderWallTarget, isolationDriveIntoLoaderWallConfig, isolationDriveIntoGoalPID);
+
+static DriveToPointUntilXCommand reverseToHighGoal(drivebase, positionTracking, isolationReverseToHighGoalTarget, isolationReverseToHighGoalConfig, isolationDriveToPointPID);
+
+static DriveStraightCommand driveIntoHighGoal(drivebase, isolationDriveIntoHighGoalTarget, isolationDriveIntoHighGoalConfig, isolationDriveIntoGoalPID);
+
+static WaitAndScoreCommand scoreHighGoal(intake, isolationScoreHighConfig);
 ////////////////////////////////
 
 
 static ParallelDeadlineGroup FirstTowerAndIntakeGroup(&FirstTowerAndIntakeDriveCommand);
 static ParallelDeadlineGroup SecondTowerAndIntakeGroup(&SecondTowerAndIntakeDriveCommand);
+static ParallelDeadlineGroup loadFromRightWallGroup(&driveIntoLoaderWall);
 
 void build_isolation_routine(){
+    static bool built = false;
+    if (built) {
+        return;
+    }
+    built = true;
+
     FirstTowerAndIntakeGroup.addCommand(&defaultIntake);
     SecondTowerAndIntakeGroup.addCommand(&defaultIntake);
+    loadFromRightWallGroup.addCommand(&intakeWhileLoading);
 
     AI_ISOLATION_ROUTE.addCommand(&FirstTowerAndIntakeGroup);
     AI_ISOLATION_ROUTE.addCommand(&SecondTowerAndIntakeGroup);
     AI_ISOLATION_ROUTE.addCommand(&turnForWallAlignment);
     AI_ISOLATION_ROUTE.addCommand(&topWallAlignmentForLoading);
+
+
+
+    AI_ISOLATION_ROUTE.addCommand(&lowerLoader);
+    AI_ISOLATION_ROUTE.addCommand(&turnForLoaderWall);
+
+    
+    AI_ISOLATION_ROUTE.addCommand(&loadFromRightWallGroup);
+    AI_ISOLATION_ROUTE.addCommand(&reverseToHighGoal);
+    AI_ISOLATION_ROUTE.addCommand(&driveIntoHighGoal);
+    AI_ISOLATION_ROUTE.addCommand(&scoreHighGoal);
     
 }

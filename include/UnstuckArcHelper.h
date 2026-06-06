@@ -2,6 +2,7 @@
 
 #include "Drivetrain.h"
 #include "RobotConfig.h"
+#include "RandomUnstuckOrder.h"
 
 #include <cmath>
 
@@ -31,6 +32,7 @@ class UnstuckArcHelper {
 private:
     UnstuckArcConfig config;
     UnstuckArcStage stage;
+    RandomUnstuckOrder unstuckOrder;
 
     int attemptCount;
 
@@ -89,10 +91,59 @@ private:
             config.error_progress_threshold > 0.0f;
     }
 
+    UnstuckArcStage stageFromMove(int move) const {
+        if (move == RANDOM_UNSTUCK_FORWARD_RIGHT) {
+            return UNSTUCK_ARC_FORWARD_RIGHT;
+        }
+
+        if (move == RANDOM_UNSTUCK_FORWARD_LEFT) {
+            return UNSTUCK_ARC_FORWARD_LEFT;
+        }
+
+        if (move == RANDOM_UNSTUCK_BACK_RIGHT) {
+            return UNSTUCK_ARC_BACK_RIGHT;
+        }
+
+        return UNSTUCK_ARC_BACK_LEFT;
+    }
+
+    float timeForStage(UnstuckArcStage currentStage) const {
+        if (currentStage == UNSTUCK_ARC_FORWARD_RIGHT ||
+            currentStage == UNSTUCK_ARC_FORWARD_LEFT) {
+            return config.forward_time;
+        }
+
+        return config.reverse_time;
+    }
+
+    void applyStage(Drivetrain& drivetrain, UnstuckArcStage currentStage) {
+        if (currentStage == UNSTUCK_ARC_FORWARD_RIGHT) {
+            applyArc(drivetrain, config.forward_speed, config.turn_speed);
+        }
+        else if (currentStage == UNSTUCK_ARC_FORWARD_LEFT) {
+            applyArc(drivetrain, config.forward_speed, -config.turn_speed);
+        }
+        else if (currentStage == UNSTUCK_ARC_BACK_RIGHT) {
+            applyArc(drivetrain, -config.reverse_speed, config.turn_speed);
+        }
+        else if (currentStage == UNSTUCK_ARC_BACK_LEFT) {
+            applyArc(drivetrain, -config.reverse_speed, -config.turn_speed);
+        }
+    }
+
+    unsigned int makeSeed(Drivetrain& drivetrain) {
+        return
+            static_cast<unsigned int>(master_timer.time(msec)) ^
+            static_cast<unsigned int>(drivetrain.get_left_front_motor_position() * 31.0f) ^
+            static_cast<unsigned int>(drivetrain.get_heading_degrees() * 17.0f) ^
+            static_cast<unsigned int>(attemptCount * 97);
+    }
+
 public:
     UnstuckArcHelper()
         : config(),
           stage(UNSTUCK_ARC_IDLE),
+          unstuckOrder(),
           attemptCount(0),
           stageStartTime(0),
           lastCheckTime(0),
@@ -192,7 +243,8 @@ public:
         }
 
         attemptCount++;
-        stage = UNSTUCK_ARC_FORWARD_RIGHT;
+        unstuckOrder.reset(makeSeed(drivetrain));
+        stage = stageFromMove(unstuckOrder.current());
         stageStartTime = master_timer.time(msec);
         resetMonitor(drivetrain, errorMagnitude);
         return true;
@@ -211,48 +263,18 @@ public:
         float now = master_timer.time(msec);
         float elapsed = now - stageStartTime;
 
-        if (stage == UNSTUCK_ARC_FORWARD_RIGHT) {
-            applyArc(drivetrain, config.forward_speed, config.turn_speed);
+        if (isActive()) {
+            applyStage(drivetrain, stage);
 
-            if (elapsed >= config.forward_time) {
-                stage = UNSTUCK_ARC_FORWARD_LEFT;
-                stageStartTime = now;
-                resetMonitor(drivetrain, errorMagnitude);
-            }
-
-            return true;
-        }
-
-        if (stage == UNSTUCK_ARC_FORWARD_LEFT) {
-            applyArc(drivetrain, config.forward_speed, -config.turn_speed);
-
-            if (elapsed >= config.forward_time) {
-                stage = UNSTUCK_ARC_BACK_RIGHT;
-                stageStartTime = now;
-                resetMonitor(drivetrain, errorMagnitude);
-            }
-
-            return true;
-        }
-
-        if (stage == UNSTUCK_ARC_BACK_RIGHT) {
-            applyArc(drivetrain, -config.reverse_speed, config.turn_speed);
-
-            if (elapsed >= config.reverse_time) {
-                stage = UNSTUCK_ARC_BACK_LEFT;
-                stageStartTime = now;
-                resetMonitor(drivetrain, errorMagnitude);
-            }
-
-            return true;
-        }
-
-        if (stage == UNSTUCK_ARC_BACK_LEFT) {
-            applyArc(drivetrain, -config.reverse_speed, -config.turn_speed);
-
-            if (elapsed >= config.reverse_time) {
-                stage = UNSTUCK_ARC_IDLE;
-                resetMonitor(drivetrain, errorMagnitude);
+            if (elapsed >= timeForStage(stage)) {
+                if (unstuckOrder.advance()) {
+                    stage = stageFromMove(unstuckOrder.current());
+                    stageStartTime = now;
+                    resetMonitor(drivetrain, errorMagnitude);
+                } else {
+                    stage = UNSTUCK_ARC_IDLE;
+                    resetMonitor(drivetrain, errorMagnitude);
+                }
             }
 
             return true;

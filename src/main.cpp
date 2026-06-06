@@ -13,7 +13,8 @@ void isolationPeriod(){
     drivebase.stop();
     intake.stop();
 
-    scheduler.schedule(&AI_ISOLATION_ROUTE);
+    //scheduler.schedule(&AI_ISOLATION_ROUTE);
+    scheduler.schedule(&AI_ISO_ROUTE);
     positionTracking.update_raw_pose();
     drivebase.set_odom_pose(
         positionTracking.get_x(),
@@ -59,6 +60,7 @@ int main() {
     
     build_interaction_routine();
     build_isolation_routine();
+    build_iso_route();
     while(drivetrain_inertial.isCalibrating() || GPSSensor.isCalibrating() || GPSBackup.isCalibrating()){
         vex::task::sleep(10);
     }

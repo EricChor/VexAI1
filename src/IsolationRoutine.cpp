@@ -34,8 +34,8 @@
 SequentialCommandGroup AI_ISOLATION_ROUTE;
 
 static DriveToPointTarget FirstTowerAndIntakeDriveTarget{
-    .target_x = 24,
-    .target_y = 24
+    .target_x = 72,
+    .target_y = 72
 };
 
 static DriveToPointUntilYTarget SecondTowerAndIntakeDriveTarget{
@@ -73,9 +73,9 @@ static DrivePID isolationDefaultPID {
     .linear_kI = 0.0,
     .linear_kD = 0.1,
 
-    .angular_kP = 0.2,
+    .angular_kP = 0.3,
     .angular_kI = 0.0,
-    .angular_kD = 0.15,
+    .angular_kD = 0.004,
 
     .angular_integral_windup_threshold = 20,
     .linear_integral_windup_threshold = 20
@@ -299,19 +299,68 @@ void build_isolation_routine(){
     loadFromRightWallGroup.addCommand(&intakeWhileLoading);
 
     AI_ISOLATION_ROUTE.addCommand(&FirstTowerAndIntakeGroup);
-    AI_ISOLATION_ROUTE.addCommand(&SecondTowerAndIntakeGroup);
     AI_ISOLATION_ROUTE.addCommand(&turnForWallAlignment);
     AI_ISOLATION_ROUTE.addCommand(&topWallAlignmentForLoading);
-
-
-
     AI_ISOLATION_ROUTE.addCommand(&lowerLoader);
     AI_ISOLATION_ROUTE.addCommand(&turnForLoaderWall);
-
-    
     AI_ISOLATION_ROUTE.addCommand(&loadFromRightWallGroup);
     AI_ISOLATION_ROUTE.addCommand(&reverseToHighGoal);
     AI_ISOLATION_ROUTE.addCommand(&driveIntoHighGoal);
     AI_ISOLATION_ROUTE.addCommand(&scoreHighGoal);
     
 }
+
+/////////////////////////////////////////////////////////////////////////////////////////////
+SequentialCommandGroup AI_ISO_ROUTE;
+DriveStraightTarget DST1{
+    .target_distance =32.5, .target_heading = 260
+
+};
+DriveStraightConfig DSC1{
+    .max_angular_speed = 30, .max_linear_speed = 50, .max_time = 3000, .max_accel= 70, .acceptable_error = 2,
+     .settle_time = 50, 
+     .unstuck = {
+        .stuck_check_time = 750,
+        .heading_change_threshold = 3,
+        .error_progress_threshold = 3,
+        .forward_speed = 15,
+        .reverse_speed = 15,
+        .turn_speed = 10,
+        .forward_time = 300,
+        .reverse_time = 400,
+        .max_attempts = 1
+    }
+};
+InertialTurnConfig ITCg1{
+    .max_speed = 60, .max_time = 3000, .settle_error = 2,
+    .settle_speed = 30, .settle_time = 100,
+    .unstuck ={
+        .stuck_check_time = 750,
+        .heading_change_threshold = 3,
+        .error_progress_threshold = 3,
+        .forward_speed = 15,
+        .reverse_speed = 15,
+        .turn_speed = 10,
+        .forward_time = 300,
+        .reverse_time = 400,
+        .max_attempts = 1
+    } 
+};
+InertialTurnTarget ITT1{
+    .target_heading = 128
+};
+
+DriveStraightCommand DS1(drivebase,DST1, DSC1, isolationDefaultPID);
+IntakeWithSorting IWS1(intake, isolationIntakeSortingConfig);
+ParallelDeadlineGroup ISO_TOWER_ONE(&DS1);
+InertialTurnCommand ITC1(drivebase,ITT1,ITCg1,isolationDefaultPID);
+
+void build_iso_route(){
+ISO_TOWER_ONE.addCommand(&IWS1);
+
+AI_ISO_ROUTE.addCommand(&ISO_TOWER_ONE);
+AI_ISO_ROUTE.addCommand(&ITC1);
+}
+
+
+

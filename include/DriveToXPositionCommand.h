@@ -18,6 +18,10 @@ struct DriveToXPositionConfig {
     float max_linear_speed;
     float max_angular_speed;
     float acceptable_error;
+    float heading_acceptable_error;
+    float max_linear_heading_error;
+    float min_linear_speed;
+    float min_angular_speed;
     float max_time;
     float settle_time;
     UnstuckArcConfig unstuck;
@@ -64,6 +68,22 @@ private:
         }
 
         return value > 0 ? maxMagnitude : -maxMagnitude;
+    }
+
+    float applyMinimumSpeed(
+        float speed,
+        float minimumSpeed,
+        float error,
+        float acceptableError
+    ) {
+        if (minimumSpeed <= 0.0f ||
+            std::fabs(error) <= acceptableError ||
+            std::fabs(speed) >= minimumSpeed) {
+
+            return speed;
+        }
+
+        return error > 0.0f ? minimumSpeed : -minimumSpeed;
     }
 
     void scaleDrivePower(float& leftPower, float& rightPower) {
@@ -127,15 +147,19 @@ public:
         endTime = master_timer.time(msec) + config.max_time;
         insideThresholdEndTime = 0;
 
-        linearPreviousError = 0;
+        positionTracking.update_raw_pose();
+
+        float rawXError = target.target_x - positionTracking.get_x();
+        linearPreviousError = rawXError * getForwardAxisSign();
         linearIntegralError = 0;
-        angularPreviousError = 0;
+        angularPreviousError =
+            headingError(target.target_heading, drivetrain.get_heading_degrees());
         angularIntegralError = 0;
 
         unstuck.configure(config.unstuck);
         unstuck.initialize(
             drivetrain,
-            std::fabs(target.target_x - positionTracking.get_x())
+            std::fabs(rawXError)
         );
     }
 
@@ -149,13 +173,14 @@ public:
         linearPreviousError = linearError;
         float progressError = std::fabs(rawXError);
 
+        float angularError =
+            headingError(target.target_heading, drivetrain.get_heading_degrees());
+        float angularDerivativeError = angularError - angularPreviousError;
+        angularPreviousError = angularError;
+
         if (now >= endTime) {
             timedOut = true;
             finished = true;
-            return;
-        }
-
-        if (unstuck.run(drivetrain, progressError)) {
             return;
         }
 
@@ -165,10 +190,9 @@ public:
             return;
         }
 
-        float angularError =
-            headingError(target.target_heading, drivetrain.get_heading_degrees());
-        float angularDerivativeError = angularError - angularPreviousError;
-        angularPreviousError = angularError;
+        if (unstuck.run(drivetrain, progressError)) {
+            return;
+        }
 
         if (std::fabs(linearError) <= PID.linear_integral_windup_threshold) {
             linearIntegralError += linearError;
@@ -192,22 +216,62 @@ public:
             PID.angular_kI * angularIntegralError +
             PID.angular_kD * angularDerivativeError;
 
+        linearSpeed = applyMinimumSpeed(
+            linearSpeed,
+            config.min_linear_speed,
+            linearError,
+            config.acceptable_error
+        );
+        angularSpeed = applyMinimumSpeed(
+            angularSpeed,
+            config.min_angular_speed,
+            angularError,
+            config.heading_acceptable_error
+        );
+
         linearSpeed = clamp(linearSpeed, config.max_linear_speed);
         angularSpeed = clamp(angularSpeed, config.max_angular_speed);
+
+        bool headingReadyForTranslation =
+            config.max_linear_heading_error <= 0.0f ||
+            std::fabs(angularError) <= config.max_linear_heading_error;
+
+        bool headingAtTarget =
+            config.heading_acceptable_error <= 0.0f ||
+            std::fabs(angularError) <= config.heading_acceptable_error;
+
+        if (!headingReadyForTranslation) {
+            linearSpeed = 0.0f;
+            linearIntegralError = 0.0f;
+        }
+
+        if (std::fabs(rawXError) <= config.acceptable_error) {
+            linearSpeed = 0.0f;
+            linearIntegralError = 0.0f;
+        }
+
+        if (headingAtTarget) {
+            angularSpeed = 0.0f;
+            angularIntegralError = 0.0f;
+        }
 
         float leftPower = linearSpeed + angularSpeed;
         float rightPower = linearSpeed - angularSpeed;
         scaleDrivePower(leftPower, rightPower);
 
-        bool tryingToMove =
+        bool tryingToTranslate =
+            headingReadyForTranslation &&
             std::fabs(rawXError) > config.acceptable_error &&
-            (
-                std::fabs(leftPower) > 5.0f ||
-                std::fabs(rightPower) > 5.0f
-            );
+            std::fabs(linearSpeed) > 5.0f;
 
-        if (unstuck.shouldStart(drivetrain, progressError, tryingToMove)) {
-            if (!unstuck.start(drivetrain, progressError)) {
+        if (unstuck.shouldStart(drivetrain, progressError, tryingToTranslate)) {
+            if (!unstuck.startLateralShift(
+                    drivetrain,
+                    progressError,
+                    linearSpeed >= 0.0f,
+                    leftPower,
+                    rightPower
+                )) {
                 timedOut = true;
                 finished = true;
             }
@@ -217,7 +281,9 @@ public:
 
         drivetrain.set_drive_power(leftPower, rightPower);
 
-        if (std::fabs(rawXError) <= config.acceptable_error) {
+        if (std::fabs(rawXError) <= config.acceptable_error &&
+            headingAtTarget) {
+
             if (!thresholdTimerSet) {
                 insideThresholdEndTime = now + config.settle_time;
                 thresholdTimerSet = true;

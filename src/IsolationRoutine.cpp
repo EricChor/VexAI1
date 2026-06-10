@@ -33,6 +33,14 @@
 
 SequentialCommandGroup AI_ISOLATION_ROUTE;
 
+static GetGPSCoordinatesFilteredConfig isolationGPSBeforeScoringConfig {
+    .sampleCount = 6,
+    .minAcceptedSamples = 3,
+    .sampleIntervals = 50,
+    .maxPositionJump = 3,
+    .maxHeadingJump = 4
+};
+
 static DriveToPointTarget FirstTowerAndIntakeDriveTarget{
     .target_x = 24,
     .target_y = 24
@@ -41,8 +49,7 @@ static DriveToPointTarget FirstTowerAndIntakeDriveTarget{
 static DriveToPointUntilYTarget SecondTowerAndIntakeDriveTarget{
     .target_x = 43,
     .target_y = 48,
-    .exit_y = 48,
-    .exit_direction = DRIVE_TO_POINT_EXIT_ABOVE_Y
+    .exit_y = 48
 };
 
 static DriveToPointConfig DriveToPointDefaultConfig{
@@ -64,6 +71,7 @@ static DriveToPointConfig DriveToPointDefaultConfig{
     .turn_speed = 15,
     .max_reverse_time = 500,
     .max_turn_time = 300,
+    .unstuck_max_accel = 100,
     .max_unstuck_attempts = 1,
     .drive_direction = DRIVE_TO_POINT_DRIVE_FORWARD
 };
@@ -148,6 +156,7 @@ static InertialTurnConfig isolationInertialTurnConfig{
         .turn_speed = 10,
         .forward_time = 300,
         .reverse_time = 400,
+        .max_accel = 100,
         .max_attempts = 1
     }
 };
@@ -163,6 +172,9 @@ static WallAlignmentConfig isolationWallConfig {
     .acceptable_error = 0.5,
     .heading_acceptable_error = 3,
     .max_linear_heading_error = 15,
+    .sensor_difference_kP = 2.0,
+    .sensor_difference_acceptable_error = 1.0,
+    .max_linear_sensor_difference = 3.0,
     .max_time = 7000,
     .max_accel = 150,
     .settle_time = 200,
@@ -175,6 +187,7 @@ static WallAlignmentConfig isolationWallConfig {
         .turn_speed = 12,
         .forward_time = 300,
         .reverse_time = 500,
+        .max_accel = 100,
         .max_attempts = 2
     }
 };
@@ -187,6 +200,7 @@ static DriveStraightConfig isolationDriveIntoLoaderWallConfig{
     .max_accel = 0,
     .settle_time = 100,
     .unstuck = {
+        .max_accel = 100,
         .max_attempts = 0
     }
 };
@@ -196,34 +210,32 @@ static DriveStraightTarget isolationDriveIntoLoaderWallTarget{
     .target_heading = 90
 };
 
-static DriveToPointConfig isolationReverseToHighGoalConfig{
-    .max_linear_speed = 30,
-    .max_angular_speed = 25,
-    .position_acceptable_error = 2,
-    .heading_acceptable_error = 3,
-    .max_time = 10000,
-    .pointing_settle_time = 150,
-    .position_settle_time = 200,
+static DriveToXPositionConfig isolationReverseToHighGoalConfig{
+    .max_linear_speed = 25,
+    .max_angular_speed = 20,
+    .acceptable_error = 1.5,
+    .heading_acceptable_error = 4,
+    .max_linear_heading_error = 8,
     .min_linear_speed = 8,
-    .min_angular_speed = 8,
-    .stuck_check_time = 750,
-    .stuck_distance_progress = 2,
-    .stuck_heading_progress = 3,
-    .stuck_encoder_change_threshold = 20,
-    .forward_speed = 20,
-    .reverse_speed = 20,
-    .turn_speed = 15,
-    .max_reverse_time = 500,
-    .max_turn_time = 300,
-    .max_unstuck_attempts = 1,
-    .drive_direction = DRIVE_TO_POINT_DRIVE_BACKWARD
+    .min_angular_speed = 6,
+    .max_time = 7000,
+    .settle_time = 200,
+    .unstuck = {
+        .stuck_check_time = 750,
+        .error_progress_threshold = 1,
+        .forward_speed = 20,
+        .reverse_speed = 20,
+        .turn_speed = 15,
+        .forward_time = 300,
+        .reverse_time = 500,
+        .max_accel = 100,
+        .max_attempts = 1
+    }
 };
 
-static DriveToPointUntilXTarget isolationReverseToHighGoalTarget{
+static DriveToXPositionTarget isolationReverseToHighGoalTarget{
     .target_x = 36,
-    .target_y = 48,
-    .exit_x = 36,
-    .exit_direction = DRIVE_TO_POINT_EXIT_LEFT_OF_X
+    .target_heading = 90
 };
 
 static DriveStraightConfig isolationDriveIntoHighGoalConfig{
@@ -234,6 +246,7 @@ static DriveStraightConfig isolationDriveIntoHighGoalConfig{
     .max_accel = 0,
     .settle_time = 250,
     .unstuck = {
+        .max_accel = 100,
         .max_attempts = 0
     }
 };
@@ -275,11 +288,22 @@ static InertialTurnCommand turnForLoaderWall(drivebase,isolationTurnForLoaderWal
 
 static DriveStraightCommand driveIntoLoaderWall(drivebase, isolationDriveIntoLoaderWallTarget, isolationDriveIntoLoaderWallConfig, isolationDriveIntoGoalPID);
 
-static DriveToPointUntilXCommand reverseToHighGoal(drivebase, positionTracking, isolationReverseToHighGoalTarget, isolationReverseToHighGoalConfig, isolationDriveToPointPID);
+static DriveToXPositionCommand reverseToHighGoal(drivebase, positionTracking, isolationReverseToHighGoalTarget, isolationReverseToHighGoalConfig, isolationDriveToPointPID);
 
 static DriveStraightCommand driveIntoHighGoal(drivebase, isolationDriveIntoHighGoalTarget, isolationDriveIntoHighGoalConfig, isolationDriveIntoGoalPID);
 
 static WaitAndScoreCommand scoreHighGoal(intake, isolationScoreHighConfig);
+
+static GetGPSCoordinatesFilteredCommand updateGPSBeforeHighGoal(
+    positionTracking,
+    isolationGPSBeforeScoringConfig
+);
+
+static SetDrivetrainPoseFromGPSCommand setPoseFromGPSBeforeHighGoal(
+    drivebase,
+    positionTracking,
+    &updateGPSBeforeHighGoal
+);
 ////////////////////////////////
 
 
@@ -310,6 +334,8 @@ void build_isolation_routine(){
 
     
     AI_ISOLATION_ROUTE.addCommand(&loadFromRightWallGroup);
+    AI_ISOLATION_ROUTE.addCommand(&updateGPSBeforeHighGoal);
+    AI_ISOLATION_ROUTE.addCommand(&setPoseFromGPSBeforeHighGoal);
     AI_ISOLATION_ROUTE.addCommand(&reverseToHighGoal);
     AI_ISOLATION_ROUTE.addCommand(&driveIntoHighGoal);
     AI_ISOLATION_ROUTE.addCommand(&scoreHighGoal);

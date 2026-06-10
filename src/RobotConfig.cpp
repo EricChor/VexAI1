@@ -3,7 +3,7 @@
 
 brain Brain;
 
-motor left_front(PORT15,ratio6_1,true);
+motor left_front(PORT14,ratio6_1,true);
 motor left_back_bottom(PORT18,ratio6_1,true);
 motor left_back_top(PORT11,ratio6_1,false);
 

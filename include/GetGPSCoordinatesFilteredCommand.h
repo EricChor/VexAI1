@@ -97,9 +97,10 @@ class GetGPSCoordinatesFilteredCommand : public Command{
             float now = master_timer.time();
             var.nextSampleTime = now;
 
-            var.referenceX = positionTracking.get_raw_x();
-            var.referenceY = positionTracking.get_raw_y();
-            var.referenceHeading = positionTracking.get_raw_heading();
+            positionTracking.update_raw_pose();
+            var.referenceX = positionTracking.get_x();
+            var.referenceY = positionTracking.get_y();
+            var.referenceHeading = positionTracking.get_heading();
 
             var.sumX = 0;
             var.sumY = 0;
@@ -134,9 +135,10 @@ class GetGPSCoordinatesFilteredCommand : public Command{
                 return;
             }
 
-            var.currentX = positionTracking.get_raw_x();
-            var.currentY = positionTracking.get_raw_y();
-            var.currentHeading = positionTracking.get_raw_heading();
+            positionTracking.update_raw_pose();
+            var.currentX = positionTracking.get_x();
+            var.currentY = positionTracking.get_y();
+            var.currentHeading = positionTracking.get_heading();
 
             var.xDifference = var.currentX - var.referenceX;
             var.yDifference = var.currentY - var.referenceY;
@@ -169,6 +171,7 @@ class GetGPSCoordinatesFilteredCommand : public Command{
                     var.filteredHeading = normalizeHeading(var.referenceHeading + var.averageHeadingDelta);
 
                     positionTracking.set_pose(var.filteredX,var.filteredY,var.filteredHeading);
+                    drivetrain_inertial.setHeading(positionTracking.get_heading(),degrees);
                     successful = true;
                 } else {
                     successful = false;

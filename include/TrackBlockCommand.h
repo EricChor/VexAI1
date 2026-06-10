@@ -26,6 +26,7 @@ struct TrackingBlocksConfig {
     float reverseSpeed;
     float forwardSpeed;
     float turnSpeed;
+    float maxUnstuckAccel;
 
     float maxReverseTime;                  // ms
     float maxForwardTime;                  // ms
@@ -43,7 +44,10 @@ struct TrackingBlocksConfig {
     float cameraHorizontalFovDegrees;
 
     // Avoid-zone settings
-    FieldAvoidZone avoidZones[9];
+    FieldAvoidZone avoidZones[17];
+
+    // Maximum time for one tracking attempt before returning to the routine.
+    float maxTrackingTime;
 };
 
 enum TrackBlockState {
@@ -60,7 +64,8 @@ enum TrackBlockResult {
     TRACK_BLOCK_SUCCESS,
     TRACK_BLOCK_LOST,
     TRACK_BLOCK_AVOIDED,
-    TRACK_BLOCK_STUCK_FAILED
+    TRACK_BLOCK_STUCK_FAILED,
+    TRACK_BLOCK_TIMEOUT
 };
 
 class TrackBlockCommand : public Command {
@@ -97,11 +102,18 @@ private:
     bool xCentered;
     bool yCloseEnough;
     int droppedTrackingFrameCount;
+    float trackingEndTime;
 
     // Stuck detection variables
     float lastStuckCheckTime;
     float unstuckStartTime;
     int unstuckAttemptCount;
+    int noProgressCheckCount;
+    float unstuckPreviousLeftPower;
+    float unstuckPreviousRightPower;
+    float unstuckStageTime;
+    bool unstuckStageAtSpeed;
+    bool unstuckFinishing;
     RandomUnstuckOrder unstuckOrder;
 
     float lastHeading;
@@ -112,11 +124,14 @@ private:
     float estimatedBlockFieldX;
     float estimatedBlockFieldY;
 
+    int lastProgressXError;
     int lastProgressYError;
 
 private:
     void failStuck() {
         drivetrain.set_drive_power(0, 0);
+        unstuckPreviousLeftPower = 0;
+        unstuckPreviousRightPower = 0;
         result = TRACK_BLOCK_STUCK_FAILED;
         currentState = TRACK_BLOCK_DONE;
         finished = true;
@@ -208,7 +223,7 @@ private:
     }
 
     bool blockIsInsideAnyAvoidZone() {
-        for (int i = 0; i < 9; i++) {
+        for (int i = 0; i < 17; i++) {
             if (pointInsideAvoidZone(
                     estimatedBlockFieldX,
                     estimatedBlockFieldY,
@@ -390,11 +405,13 @@ private:
     void resetStuckMonitor() {
         float now = master_timer.time(msec);
 
+        noProgressCheckCount = 0;
         lastStuckCheckTime = now;
 
         lastHeading = drivetrain.get_heading_degrees();
         lastEncoderPosition = drivetrain.get_left_front_motor_position();
 
+        lastProgressXError = xError;
         lastProgressYError = yError;
     }
 
@@ -423,53 +440,87 @@ private:
     }
 
     void startCurrentUnstuckMovement() {
+        setCommandStatus("Track Block Unstuck");
         currentState = stateFromUnstuckMove(unstuckOrder.current());
         unstuckStartTime = master_timer.time(msec);
+        unstuckStageAtSpeed = false;
         resetStuckMonitor();
     }
 
-    void startUnstuckForwardRight() {
+    void startUnstuckLateralShift(
+        bool wasMovingForward,
+        float initialLeftPower,
+        float initialRightPower
+    ) {
+        if (config.maxUnstuckAttempts <= 0) {
+            return;
+        }
+
         if (unstuckAttemptCount >= config.maxUnstuckAttempts) {
             failStuck();
             return;
         }
 
         unstuckAttemptCount++;
-        unstuckOrder.reset(makeUnstuckSeed());
+        unstuckPreviousLeftPower = initialLeftPower;
+        unstuckPreviousRightPower = initialRightPower;
+        unstuckFinishing = false;
+        unstuckStageTime =
+            (wasMovingForward
+                ? config.maxReverseTime
+                : config.maxForwardTime) *
+            LATERAL_SHIFT_TIME_MULTIPLIER;
+        unstuckOrder.resetLateralShift(makeUnstuckSeed(), wasMovingForward);
         startCurrentUnstuckMovement();
     }
 
-    void startUnstuckForwardLeft() {
-        currentState = TRACKING_UNSTUCK_FORWARD_LEFT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
-    }
+    bool applyUnstuckArc(float linearSpeed, float turnSpeed) {
+        float targetLeftPower = linearSpeed + turnSpeed;
+        float targetRightPower = linearSpeed - turnSpeed;
+        float leftPower = targetLeftPower;
+        float rightPower = targetRightPower;
 
-    void startUnstuckBackRight() {
-        currentState = TRACKING_UNSTUCK_BACK_RIGHT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
-    }
+        if (config.maxUnstuckAccel > 0.0f) {
+            float maxChange = config.maxUnstuckAccel / 100.0f;
 
-    void startUnstuckBackLeft() {
-        currentState = TRACKING_UNSTUCK_BACK_LEFT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
-    }
+            if (leftPower > unstuckPreviousLeftPower + maxChange) {
+                leftPower = unstuckPreviousLeftPower + maxChange;
+            } else if (leftPower < unstuckPreviousLeftPower - maxChange) {
+                leftPower = unstuckPreviousLeftPower - maxChange;
+            }
 
-    void applyUnstuckArc(float linearSpeed, float turnSpeed) {
-        drivetrain.set_drive_power(
-            linearSpeed + turnSpeed,
-            linearSpeed - turnSpeed
-        );
+            if (rightPower > unstuckPreviousRightPower + maxChange) {
+                rightPower = unstuckPreviousRightPower + maxChange;
+            } else if (rightPower < unstuckPreviousRightPower - maxChange) {
+                rightPower = unstuckPreviousRightPower - maxChange;
+            }
+        }
+
+        drivetrain.set_drive_power(leftPower, rightPower);
+        unstuckPreviousLeftPower = leftPower;
+        unstuckPreviousRightPower = rightPower;
+
+        return
+            std::fabs(leftPower - targetLeftPower) < 0.01f &&
+            std::fabs(rightPower - targetRightPower) < 0.01f;
     }
 
     void returnToNormalTracking() {
+        setCommandStatus("Track Block");
         currentState = TRACKING_NORMAL;
+        unstuckPreviousLeftPower = 0;
+        unstuckPreviousRightPower = 0;
+        unstuckStageAtSpeed = false;
+        unstuckFinishing = false;
         resetStuckMonitor();
     }
 
     bool robotMadeProgressWhileTracking() {
+        if (config.maxUnstuckAttempts <= 0 ||
+            config.stuckCheckTime <= 0.0f) {
+            return true;
+        }
+
         float now = master_timer.time(msec);
 
         if (now - lastStuckCheckTime < config.stuckCheckTime) {
@@ -482,17 +533,14 @@ private:
         float currentHeading =
             drivetrain.get_heading_degrees();
 
-        float encoderChange =
-            currentEncoderPosition - lastEncoderPosition;
-
         float headingChange =
             getHeadingChange(currentHeading, lastHeading);
 
-        int yErrorChange =
-            yError - lastProgressYError;
+        int yErrorProgress =
+            std::abs(lastProgressYError) - std::abs(yError);
 
-        bool encoderMoved =
-            std::fabs(encoderChange) >= config.stuckEncoderChangeThreshold;
+        int xErrorProgress =
+            std::abs(lastProgressXError) - std::abs(xError);
 
         bool headingMoved =
             std::fabs(headingChange) >= config.stuckHeadingChangeThreshold;
@@ -502,15 +550,33 @@ private:
             if the robot is actually moving toward the block,
             yError should change.
         */
-        bool visionYChanged =
-            std::abs(yErrorChange) >= config.minYErrorProgress;
+        bool visionYImproved =
+            yErrorProgress >= config.minYErrorProgress;
 
-        if (encoderMoved || headingMoved || visionYChanged) {
+        bool turningTowardBlock =
+            !xCentered && headingMoved && xErrorProgress > 0;
+
+        if (turningTowardBlock || visionYImproved) {
+            // Limit consecutive failed escape attempts, not every escape used
+            // during the full lifetime of this tracking command.
+            unstuckAttemptCount = 0;
             lastStuckCheckTime = now;
             lastEncoderPosition = currentEncoderPosition;
             lastHeading = currentHeading;
+            lastProgressXError = xError;
             lastProgressYError = yError;
 
+            return true;
+        }
+
+        noProgressCheckCount++;
+
+        if (noProgressCheckCount < REQUIRED_CONSECUTIVE_STUCK_CHECKS) {
+            lastStuckCheckTime = now;
+            lastHeading = currentHeading;
+            lastEncoderPosition = currentEncoderPosition;
+            lastProgressXError = xError;
+            lastProgressYError = yError;
             return true;
         }
 
@@ -520,30 +586,41 @@ private:
     void runUnstuckState() {
         float now = master_timer.time(msec);
         float elapsed = now - unstuckStartTime;
-        bool forwardArc =
-            currentState == TRACKING_UNSTUCK_FORWARD_RIGHT ||
-            currentState == TRACKING_UNSTUCK_FORWARD_LEFT;
+        bool stageAtSpeed = false;
 
-        float movementTime = forwardArc ? config.maxForwardTime : config.maxReverseTime;
+        if (unstuckFinishing) {
+            if (applyUnstuckArc(0.0f, 0.0f)) {
+                returnToNormalTracking();
+            }
+            return;
+        }
 
         if (currentState == TRACKING_UNSTUCK_FORWARD_RIGHT) {
-            applyUnstuckArc(config.forwardSpeed, config.turnSpeed);
+            stageAtSpeed = applyUnstuckArc(config.forwardSpeed, config.turnSpeed);
         }
         else if (currentState == TRACKING_UNSTUCK_FORWARD_LEFT) {
-            applyUnstuckArc(config.forwardSpeed, -config.turnSpeed);
+            stageAtSpeed = applyUnstuckArc(config.forwardSpeed, -config.turnSpeed);
         }
         else if (currentState == TRACKING_UNSTUCK_BACK_RIGHT) {
-            applyUnstuckArc(-config.reverseSpeed, config.turnSpeed);
+            stageAtSpeed = applyUnstuckArc(-config.reverseSpeed, config.turnSpeed);
         }
         else if (currentState == TRACKING_UNSTUCK_BACK_LEFT) {
-            applyUnstuckArc(-config.reverseSpeed, -config.turnSpeed);
+            stageAtSpeed = applyUnstuckArc(-config.reverseSpeed, -config.turnSpeed);
         }
 
-        if (elapsed >= movementTime) {
+        if (!unstuckStageAtSpeed) {
+            if (stageAtSpeed) {
+                unstuckStageAtSpeed = true;
+                unstuckStartTime = now;
+            }
+            return;
+        }
+
+        if (elapsed >= unstuckStageTime) {
             if (unstuckOrder.advance()) {
                 startCurrentUnstuckMovement();
             } else {
-                returnToNormalTracking();
+                unstuckFinishing = true;
             }
         }
     }
@@ -580,15 +657,23 @@ public:
           xCentered(false),
           yCloseEnough(false),
           droppedTrackingFrameCount(0),
+          trackingEndTime(0),
           lastStuckCheckTime(0),
           unstuckStartTime(0),
           unstuckAttemptCount(0),
+          noProgressCheckCount(0),
+          unstuckPreviousLeftPower(0),
+          unstuckPreviousRightPower(0),
+          unstuckStageTime(0),
+          unstuckStageAtSpeed(false),
+          unstuckFinishing(false),
           unstuckOrder(),
           lastHeading(0),
           lastEncoderPosition(0),
           estimatedBlockDistance(0),
           estimatedBlockFieldX(0),
           estimatedBlockFieldY(0),
+          lastProgressXError(0),
           lastProgressYError(0)
     {
     }
@@ -618,12 +703,23 @@ public:
         xCentered = false;
         yCloseEnough = false;
         droppedTrackingFrameCount = 0;
+        trackingEndTime =
+            config.maxTrackingTime > 0.0f
+                ? master_timer.time(msec) + config.maxTrackingTime
+                : 0.0f;
         unstuckAttemptCount = 0;
+        noProgressCheckCount = 0;
+        unstuckPreviousLeftPower = 0;
+        unstuckPreviousRightPower = 0;
+        unstuckStageTime = 0;
+        unstuckStageAtSpeed = false;
+        unstuckFinishing = false;
 
         estimatedBlockDistance = 0;
         estimatedBlockFieldX = 0;
         estimatedBlockFieldY = 0;
 
+        lastProgressXError = 0;
         lastProgressYError = 0;
 
         jetson.track_block_raw_init(trackingConfig);
@@ -632,14 +728,27 @@ public:
     }
 
     void execute() override {
-        if (currentState == TRACK_BLOCK_DONE) {
+        if (currentState != TRACKING_NORMAL &&
+            currentState != TRACK_BLOCK_DONE) {
+
+            runUnstuckState();
+            return;
+        }
+
+        if (trackingEndTime > 0.0f &&
+            master_timer.time(msec) >= trackingEndTime) {
+
+            setCommandStatus("Track Block Timeout");
             drivetrain.set_drive_power(0, 0);
+            result = TRACK_BLOCK_TIMEOUT;
+            currentState = TRACK_BLOCK_DONE;
             finished = true;
             return;
         }
 
-        if (currentState != TRACKING_NORMAL) {
-            runUnstuckState();
+        if (currentState == TRACK_BLOCK_DONE) {
+            drivetrain.set_drive_power(0, 0);
+            finished = true;
             return;
         }
 
@@ -721,8 +830,16 @@ public:
         bool tryingToDrive = std::fabs(linearSpeed) >= config.minLinearSpeedForStuckCheck;
 
         if (tryingToDrive && !robotMadeProgressWhileTracking()) {
-            startUnstuckForwardRight();
+            startUnstuckLateralShift(
+                linearSpeed >= 0.0f,
+                linearSpeed + angularSpeed,
+                linearSpeed - angularSpeed
+            );
             return;
+        }
+
+        if (!tryingToDrive) {
+            resetStuckMonitor();
         }
 
         drivetrain.set_drive_power(

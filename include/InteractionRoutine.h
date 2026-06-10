@@ -10,3 +10,4 @@
 extern RepeatForeverCommandGroup AI_INTERACTION_ROUTE;
 
 extern void build_interaction_routine();
+extern void reset_interaction_corner_search_monitor();

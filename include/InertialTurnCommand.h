@@ -14,6 +14,7 @@ struct InertialTurnTarget{
 
 struct InertialTurnConfig{
     float max_speed;
+    float min_speed;
     float max_time;
     float settle_error;
     float settle_time;
@@ -114,13 +115,13 @@ class InertialTurnCommand : public Command{
 
             var.current_time = master_timer.time();
 
-            if (var.current_time >= var.end_time) {
-                var.timed_out = true;
-                finished = true;
+            if (unstuck.run(drivetrain, progressError)) {
                 return;
             }
 
-            if (unstuck.run(drivetrain, progressError)) {
+            if (var.current_time >= var.end_time) {
+                var.timed_out = true;
+                finished = true;
                 return;
             }
 
@@ -138,6 +139,17 @@ class InertialTurnCommand : public Command{
 
             var.left_drive_velocity = PID.angular_kP * var.error + PID.angular_kI * var.integral_error + PID.angular_kD * var.derivative_error;
             var.right_drive_velocity = PID.angular_kP * var.error + PID.angular_kI * var.integral_error + PID.angular_kD * var.derivative_error;
+
+            if (conf.min_speed > 0.0f &&
+                fabs(var.error) >= conf.settle_error &&
+                fabs(var.left_drive_velocity) < conf.min_speed) {
+
+                float minimumTurnSpeed =
+                    var.error > 0.0f ? conf.min_speed : -conf.min_speed;
+
+                var.left_drive_velocity = minimumTurnSpeed;
+                var.right_drive_velocity = minimumTurnSpeed;
+            }
 
             if(fabs(var.left_drive_velocity) > conf.max_speed){
                 if(var.left_drive_velocity > 0){

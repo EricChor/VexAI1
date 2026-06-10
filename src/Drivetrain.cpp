@@ -88,3 +88,7 @@ float Drivetrain::get_drivebase_gear_ratio(){
 float Drivetrain::get_left_front_motor_position(){
     return left_front.position(degrees);
 }
+
+float Drivetrain::get_right_front_motor_position(){
+    return right_front.position(degrees);
+}

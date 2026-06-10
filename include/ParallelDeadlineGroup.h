@@ -5,6 +5,7 @@ class ParallelDeadlineGroup : public Command{
     private:
         Command* deadlineCommand;
         std::vector<Command*> command_list;
+        std::vector<bool> commandFinished;
 
         bool finished;
     
@@ -14,6 +15,7 @@ class ParallelDeadlineGroup : public Command{
              finished(false)
             { 
                 command_list.reserve(5);
+                commandFinished.reserve(5);
             }
 
         void addCommand(Command* command);

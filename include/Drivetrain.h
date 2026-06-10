@@ -60,4 +60,5 @@ class Drivetrain{
         float get_drivebase_wheel_diameter();
         float get_drivebase_gear_ratio();
         float get_left_front_motor_position();
+        float get_right_front_motor_position();
 };

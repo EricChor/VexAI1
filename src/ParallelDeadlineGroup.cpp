@@ -5,6 +5,7 @@ void ParallelDeadlineGroup::addCommand(Command* command){
         return;
     }
     command_list.push_back(command);
+    commandFinished.push_back(false);
 }
 
 void ParallelDeadlineGroup::initialize(){
@@ -17,8 +18,12 @@ void ParallelDeadlineGroup::initialize(){
     }
 
     for(int i = 0; i < static_cast<int>(command_list.size()); i++){
+        commandFinished[i] = false;
+
         if(command_list[i]!= nullptr){
             command_list[i]->initialize();
+        } else {
+            commandFinished[i] = true;
         }
     }
 }
@@ -36,8 +41,15 @@ void ParallelDeadlineGroup::execute(){
     deadlineCommand->execute();
 
     for (int i = 0; i < static_cast<int>(command_list.size()); i++) {
-        if (command_list[i] != nullptr) {
-            command_list[i]->execute();
+        if (command_list[i] == nullptr || commandFinished[i]) {
+            continue;
+        }
+
+        command_list[i]->execute();
+
+        if (command_list[i]->isFinished()) {
+            command_list[i]->end();
+            commandFinished[i] = true;
         }
     }
 
@@ -56,8 +68,9 @@ void ParallelDeadlineGroup::end(){
     }
 
     for(int i = 0; i < static_cast<int>(command_list.size()); i++){
-        if(command_list[i] != nullptr){
+        if(command_list[i] != nullptr && !commandFinished[i]){
             command_list[i]->end();
+            commandFinished[i] = true;
         }
     }
     finished = true;

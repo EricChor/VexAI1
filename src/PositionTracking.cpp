@@ -112,7 +112,7 @@ void PositionTracking::update_raw_pose(){
     bool mainUsable = mainQuality >= MIN_USABLE_GPS_QUALITY;
     bool backupUsable = backupQuality >= MIN_USABLE_GPS_QUALITY;
 
-    if (mainUsable && backupUsable) {
+    if (mainUsable && backupUsable && !backupOffsetInitialized) {
         backupToMainOffsetX = mainPose.x - backupPose.x;
         backupToMainOffsetY = mainPose.y - backupPose.y;
         backupOffsetInitialized = true;
@@ -135,7 +135,9 @@ void PositionTracking::update_raw_pose(){
         return;
     }
 
-    gpsPose = mainPose;
+    if (mainUsable) {
+        gpsPose = mainPose;
+    }
 }
 
 void PositionTracking::set_pose(float x, float y, float heading){

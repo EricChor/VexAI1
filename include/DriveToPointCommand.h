@@ -38,6 +38,7 @@ struct DriveToPointConfig {
     float turn_speed;
     float max_reverse_time;
     float max_turn_time;
+    float unstuck_max_accel;
     int max_unstuck_attempts;
     DriveToPointDriveDirection drive_direction;
 };
@@ -86,8 +87,15 @@ private:
     float lastDistanceError;
     float lastHeadingError;
     float lastEncoderPosition;
+    float lastRightEncoderPosition;
     float unstuckStartTime;
     int unstuckAttemptCount;
+    int noProgressCheckCount;
+    float unstuckPreviousLeftPower;
+    float unstuckPreviousRightPower;
+    float unstuckStageTime;
+    bool unstuckStageAtSpeed;
+    bool unstuckFinishing;
     RandomUnstuckOrder unstuckOrder;
 
     float normalizeHeading(float heading) {
@@ -197,10 +205,12 @@ private:
     }
 
     void resetStuckMonitor() {
+        noProgressCheckCount = 0;
         lastStuckCheckTime = master_timer.time(msec);
         lastDistanceError = distanceError;
         lastHeadingError = std::fabs(headingErrorValue);
         lastEncoderPosition = drivetrain.get_left_front_motor_position();
+        lastRightEncoderPosition = drivetrain.get_right_front_motor_position();
     }
 
     DriveToPointState stateFromUnstuckMove(int move) {
@@ -228,12 +238,18 @@ private:
     }
 
     void startCurrentUnstuckMovement() {
+        setCommandStatus("Drive To Point Unstuck");
         currentState = stateFromUnstuckMove(unstuckOrder.current());
         unstuckStartTime = master_timer.time(msec);
+        unstuckStageAtSpeed = false;
         resetStuckMonitor();
     }
 
-    void startUnstuckForwardRight() {
+    void startUnstuckLateralShift(
+        bool wasMovingForward,
+        float initialLeftPower,
+        float initialRightPower
+    ) {
         if (config.max_unstuck_attempts <= 0) {
             return;
         }
@@ -246,36 +262,54 @@ private:
         }
 
         unstuckAttemptCount++;
-        unstuckOrder.reset(makeUnstuckSeed());
+        scaleDrivePower(initialLeftPower, initialRightPower);
+        unstuckPreviousLeftPower = initialLeftPower;
+        unstuckPreviousRightPower = initialRightPower;
+        unstuckFinishing = false;
+        unstuckStageTime =
+            (wasMovingForward
+                ? config.max_reverse_time
+                : config.max_turn_time) *
+            LATERAL_SHIFT_TIME_MULTIPLIER;
+        unstuckOrder.resetLateralShift(makeUnstuckSeed(), wasMovingForward);
         startCurrentUnstuckMovement();
     }
 
-    void startUnstuckForwardLeft() {
-        currentState = DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
-    }
+    bool applyUnstuckArc(float linearSpeed, float turnSpeed) {
+        float targetLeftPower = linearSpeed + turnSpeed;
+        float targetRightPower = linearSpeed - turnSpeed;
+        scaleDrivePower(targetLeftPower, targetRightPower);
 
-    void startUnstuckBackRight() {
-        currentState = DRIVE_TO_POINT_UNSTUCK_BACK_RIGHT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
-    }
+        float leftPower = targetLeftPower;
+        float rightPower = targetRightPower;
 
-    void startUnstuckBackLeft() {
-        currentState = DRIVE_TO_POINT_UNSTUCK_BACK_LEFT;
-        unstuckStartTime = master_timer.time(msec);
-        resetStuckMonitor();
-    }
+        if (config.unstuck_max_accel > 0.0f) {
+            float maxChange = config.unstuck_max_accel / 100.0f;
 
-    void applyUnstuckArc(float linearSpeed, float turnSpeed) {
-        float leftPower = linearSpeed + turnSpeed;
-        float rightPower = linearSpeed - turnSpeed;
-        scaleDrivePower(leftPower, rightPower);
+            if (leftPower > unstuckPreviousLeftPower + maxChange) {
+                leftPower = unstuckPreviousLeftPower + maxChange;
+            } else if (leftPower < unstuckPreviousLeftPower - maxChange) {
+                leftPower = unstuckPreviousLeftPower - maxChange;
+            }
+
+            if (rightPower > unstuckPreviousRightPower + maxChange) {
+                rightPower = unstuckPreviousRightPower + maxChange;
+            } else if (rightPower < unstuckPreviousRightPower - maxChange) {
+                rightPower = unstuckPreviousRightPower - maxChange;
+            }
+        }
+
         drivetrain.set_drive_power(leftPower, rightPower);
+        unstuckPreviousLeftPower = leftPower;
+        unstuckPreviousRightPower = rightPower;
+
+        return
+            std::fabs(leftPower - targetLeftPower) < 0.01f &&
+            std::fabs(rightPower - targetRightPower) < 0.01f;
     }
 
     void returnToPointing() {
+        setCommandStatus("Drive To Point");
         currentState = DRIVE_TO_POINT_POINTING;
         pointingTimerSet = false;
         positionTimerSet = false;
@@ -283,45 +317,64 @@ private:
         linearIntegralError = 0;
         angularPreviousError = headingErrorValue;
         angularIntegralError = 0;
+        unstuckPreviousLeftPower = 0;
+        unstuckPreviousRightPower = 0;
+        unstuckStageAtSpeed = false;
+        unstuckFinishing = false;
         resetStuckMonitor();
     }
 
     void runUnstuckState() {
         float now = master_timer.time(msec);
         float elapsed = now - unstuckStartTime;
-        bool forwardArc =
-            currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT ||
-            currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT;
+        bool stageAtSpeed = false;
 
-        float movementTime = forwardArc ? config.max_turn_time : config.max_reverse_time;
+        if (unstuckFinishing) {
+            if (applyUnstuckArc(0.0f, 0.0f)) {
+                returnToPointing();
+            }
+            return;
+        }
 
         if (currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT) {
-            applyUnstuckArc(config.forward_speed, config.turn_speed);
+            stageAtSpeed = applyUnstuckArc(config.forward_speed, config.turn_speed);
         }
         else if (currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT) {
-            applyUnstuckArc(config.forward_speed, -config.turn_speed);
+            stageAtSpeed = applyUnstuckArc(config.forward_speed, -config.turn_speed);
         }
         else if (currentState == DRIVE_TO_POINT_UNSTUCK_BACK_RIGHT) {
-            applyUnstuckArc(-config.reverse_speed, config.turn_speed);
+            stageAtSpeed = applyUnstuckArc(-config.reverse_speed, config.turn_speed);
         }
         else if (currentState == DRIVE_TO_POINT_UNSTUCK_BACK_LEFT) {
-            applyUnstuckArc(-config.reverse_speed, -config.turn_speed);
+            stageAtSpeed = applyUnstuckArc(-config.reverse_speed, -config.turn_speed);
         }
 
-        if (elapsed >= movementTime) {
+        if (!unstuckStageAtSpeed) {
+            if (stageAtSpeed) {
+                unstuckStageAtSpeed = true;
+                unstuckStartTime = now;
+            }
+            return;
+        }
+
+        if (elapsed >= unstuckStageTime) {
             if (unstuckOrder.advance()) {
                 startCurrentUnstuckMovement();
             } else {
-                returnToPointing();
+                unstuckFinishing = true;
             }
         }
     }
 
     bool robotMadeProgressWhileDriving(float linearSpeed) {
         if (config.max_unstuck_attempts <= 0 ||
-            config.stuck_check_time <= 0 ||
-            std::fabs(linearSpeed) < config.min_linear_speed) {
+            config.stuck_check_time <= 0) {
 
+            return true;
+        }
+
+        if (std::fabs(linearSpeed) < config.min_linear_speed) {
+            resetStuckMonitor();
             return true;
         }
 
@@ -332,19 +385,27 @@ private:
         }
 
         float currentEncoderPosition = drivetrain.get_left_front_motor_position();
+        float currentRightEncoderPosition =
+            drivetrain.get_right_front_motor_position();
         float distanceProgress = lastDistanceError - distanceError;
-        float encoderChange = currentEncoderPosition - lastEncoderPosition;
-
         bool distanceImproved =
             distanceProgress >= config.stuck_distance_progress;
 
-        bool encoderMoved =
-            std::fabs(encoderChange) >= config.stuck_encoder_change_threshold;
+        // Wheel motion alone does not prove the robot moved across the field.
+        // A blocked drivetrain can spin its wheels and otherwise suppress unstuck forever.
+        if (distanceImproved) {
+            unstuckAttemptCount = 0;
+            resetStuckMonitor();
+            return true;
+        }
 
-        if (distanceImproved || encoderMoved) {
+        noProgressCheckCount++;
+
+        if (noProgressCheckCount < REQUIRED_CONSECUTIVE_STUCK_CHECKS) {
             lastStuckCheckTime = now;
             lastDistanceError = distanceError;
             lastEncoderPosition = currentEncoderPosition;
+            lastRightEncoderPosition = currentRightEncoderPosition;
             return true;
         }
 
@@ -353,9 +414,13 @@ private:
 
     bool robotMadeProgressWhilePointing(float angularSpeed) {
         if (config.max_unstuck_attempts <= 0 ||
-            config.stuck_check_time <= 0 ||
-            std::fabs(angularSpeed) < config.min_angular_speed) {
+            config.stuck_check_time <= 0) {
 
+            return true;
+        }
+
+        if (std::fabs(angularSpeed) < config.min_angular_speed) {
+            resetStuckMonitor();
             return true;
         }
 
@@ -372,6 +437,14 @@ private:
             headingProgress >= config.stuck_heading_progress;
 
         if (headingImproved) {
+            unstuckAttemptCount = 0;
+            resetStuckMonitor();
+            return true;
+        }
+
+        noProgressCheckCount++;
+
+        if (noProgressCheckCount < REQUIRED_CONSECUTIVE_STUCK_CHECKS) {
             lastStuckCheckTime = now;
             lastHeadingError = std::fabs(headingErrorValue);
             lastEncoderPosition = drivetrain.get_left_front_motor_position();
@@ -460,6 +533,10 @@ private:
 
         linearSpeed = clamp(linearSpeed, config.max_linear_speed);
 
+        if (config.drive_direction == DRIVE_TO_POINT_DRIVE_BACKWARD) {
+            linearSpeed *= -1.0f;
+        }
+
         return linearSpeed;
     }
 
@@ -497,8 +574,15 @@ public:
           lastDistanceError(0),
           lastHeadingError(0),
           lastEncoderPosition(0),
+          lastRightEncoderPosition(0),
           unstuckStartTime(0),
           unstuckAttemptCount(0),
+          noProgressCheckCount(0),
+          unstuckPreviousLeftPower(0),
+          unstuckPreviousRightPower(0),
+          unstuckStageTime(0),
+          unstuckStageAtSpeed(false),
+          unstuckFinishing(false),
           unstuckOrder()
     {
     }
@@ -531,8 +615,15 @@ public:
         lastDistanceError = 0;
         lastHeadingError = 0;
         lastEncoderPosition = 0;
+        lastRightEncoderPosition = 0;
         unstuckStartTime = 0;
         unstuckAttemptCount = 0;
+        noProgressCheckCount = 0;
+        unstuckPreviousLeftPower = 0;
+        unstuckPreviousRightPower = 0;
+        unstuckStageTime = 0;
+        unstuckStageAtSpeed = false;
+        unstuckFinishing = false;
     }
 
     void execute() override {
@@ -544,19 +635,19 @@ public:
             resetStuckMonitor();
         }
 
-        if (now >= endTime) {
-            timedOut = true;
-            finished = true;
-            drivetrain.set_drive_power(0, 0);
-            return;
-        }
-
         if (currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_RIGHT ||
             currentState == DRIVE_TO_POINT_UNSTUCK_FORWARD_LEFT ||
             currentState == DRIVE_TO_POINT_UNSTUCK_BACK_RIGHT ||
             currentState == DRIVE_TO_POINT_UNSTUCK_BACK_LEFT) {
 
             runUnstuckState();
+            return;
+        }
+
+        if (now >= endTime) {
+            timedOut = true;
+            finished = true;
+            drivetrain.set_drive_power(0, 0);
             return;
         }
 
@@ -582,7 +673,11 @@ public:
                 endTime = now + config.max_time;
             } else {
                 if (!robotMadeProgressWhilePointing(angularSpeed)) {
-                    startUnstuckForwardRight();
+                    startUnstuckLateralShift(
+                        config.drive_direction == DRIVE_TO_POINT_DRIVE_FORWARD,
+                        angularSpeed,
+                        -angularSpeed
+                    );
                     return;
                 }
 
@@ -609,15 +704,18 @@ public:
             }
 
             float linearSpeed = getLinearSpeed();
-
-            if (!robotMadeProgressWhileDriving(linearSpeed)) {
-                startUnstuckForwardRight();
-                return;
-            }
-
             float leftPower = linearSpeed + angularSpeed;
             float rightPower = linearSpeed - angularSpeed;
             scaleDrivePower(leftPower, rightPower);
+
+            if (!robotMadeProgressWhileDriving(linearSpeed)) {
+                startUnstuckLateralShift(
+                    linearSpeed >= 0.0f,
+                    leftPower,
+                    rightPower
+                );
+                return;
+            }
 
             drivetrain.set_drive_power(leftPower, rightPower);
             return;

@@ -68,6 +68,38 @@ class GrabBlockCommand : public Command{
         GrabBlockResult result;
         bool finished;
 
+        float getAverageDrivePosition() {
+            return
+                (
+                    drivetrain.get_left_front_motor_position() +
+                    drivetrain.get_right_front_motor_position()
+                ) / 2.0f;
+        }
+
+        void applyLinearAccelLimit() {
+            GrabBlockVar& var = grabBlockVar;
+
+            if (var.max_accel <= 0.0f) {
+                return;
+            }
+
+            float maximum =
+                var.prev_left_drive_linear_velocity + var.max_accel;
+            float minimum =
+                var.prev_left_drive_linear_velocity - var.max_accel;
+
+            if (var.left_drive_linear_velocity > maximum) {
+                var.left_drive_linear_velocity = maximum;
+            }
+
+            if (var.left_drive_linear_velocity < minimum) {
+                var.left_drive_linear_velocity = minimum;
+            }
+
+            var.right_drive_linear_velocity =
+                var.left_drive_linear_velocity;
+        }
+
     public:
         GrabBlockCommand(Drivetrain &drivetrain, GrabBlockConfig& grabBlockconfig, DrivePID& PID, GrabBlockTarget& grabBlockTarget)
         :drivetrain(drivetrain),
@@ -93,7 +125,7 @@ class GrabBlockCommand : public Command{
             var.angular_derivative_error = 0;
             var.angular_previous_error = 0;
             var.angular_integral_error = 0;
-            var.initial_position = drivetrain.get_left_front_motor_position();
+            var.initial_position = getAverageDrivePosition();
             var.current_position = 0;
             var.left_drive_angular_velocity = 0;
             var.right_drive_angular_velocity = 0;
@@ -136,7 +168,7 @@ class GrabBlockCommand : public Command{
 
             var.angular_derivative_error = var.angular_error - var.angular_previous_error;
             var.angular_previous_error = var.angular_error;
-            var.current_position = ((drivetrain.get_left_front_motor_position() - var.initial_position) * drivetrain.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivetrain.get_drivebase_gear_ratio()));
+            var.current_position = ((getAverageDrivePosition() - var.initial_position) * drivetrain.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivetrain.get_drivebase_gear_ratio()));
             // std::cout << "Distance: " << driveStraightVar.current_position << std::endl;
 
             var.linear_error = target.target_distance - var.current_position;
@@ -147,14 +179,20 @@ class GrabBlockCommand : public Command{
 
             var.current_time = master_timer.time();
 
+            if (unstuck.isActive()) {
+                setCommandStatus("Grab Block Unstuck");
+            } else {
+                setCommandStatus("Grab Block");
+            }
+
+            if (unstuck.run(drivetrain, progressError)) {
+                return;
+            }
+
             if (var.current_time >= var.end_time) {
                 var.timed_out = true;
                 finished = true;
                 result = GRAB_FAILED;
-                return;
-            }
-
-            if (unstuck.run(drivetrain, progressError)) {
                 return;
             }
 
@@ -198,10 +236,24 @@ class GrabBlockCommand : public Command{
 
             var.left_drive_linear_velocity = PID.linear_kP * var.linear_error + PID.linear_kI * var.linear_integral_error + PID.linear_kD * var.linear_derivative_error;
             var.right_drive_linear_velocity = PID.linear_kP * var.linear_error + PID.linear_kI * var.linear_integral_error + PID.linear_kD * var.linear_derivative_error;
-                    
-            if(((var.left_drive_linear_velocity) > (var.prev_left_drive_linear_velocity + var.max_accel)) && (var.max_accel != 0)){
-                var.left_drive_linear_velocity = var.prev_left_drive_linear_velocity + var.max_accel;
-                var.right_drive_linear_velocity = var.prev_right_drive_linear_velocity + var.max_accel;
+
+            bool reachedGrabDistance =
+                var.linear_error <= conf.acceptable_error;
+
+            // During a normal grab approach, never reverse away from the block.
+            // Backward movement remains available inside the unstuck sequence.
+            if (reachedGrabDistance ||
+                var.left_drive_linear_velocity < 0.0f) {
+
+                var.left_drive_linear_velocity = 0.0f;
+                var.right_drive_linear_velocity = 0.0f;
+            }
+
+            if (reachedGrabDistance) {
+                var.prev_left_drive_linear_velocity = 0.0f;
+                var.prev_right_drive_linear_velocity = 0.0f;
+            } else {
+                applyLinearAccelLimit();
             }
 
             if(fabs(var.left_drive_linear_velocity) > conf.max_linear_speed){
@@ -224,9 +276,7 @@ class GrabBlockCommand : public Command{
                 std::fabs(var.linear_error) > conf.acceptable_error &&
                 (
                     std::fabs(var.left_drive_linear_velocity) > 5.0f ||
-                    std::fabs(var.right_drive_linear_velocity) > 5.0f ||
-                    std::fabs(var.left_drive_angular_velocity) > 5.0f ||
-                    std::fabs(var.right_drive_angular_velocity) > 5.0f
+                    std::fabs(var.right_drive_linear_velocity) > 5.0f
                 );
 
             if (unstuck.shouldStart(drivetrain, progressError, tryingToMove)) {
@@ -243,7 +293,7 @@ class GrabBlockCommand : public Command{
 
             var.current_time = master_timer.time();
 
-            if(fabs(var.linear_error) < conf.acceptable_error){
+            if(reachedGrabDistance){
                 if(!var.threshold_timer_set){
                     var.inside_threshold_timer = var.current_time + conf.settle_time;
                     var.threshold_timer_set = true;

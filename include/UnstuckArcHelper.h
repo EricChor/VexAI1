@@ -16,6 +16,7 @@ struct UnstuckArcConfig {
     float turn_speed;
     float forward_time;
     float reverse_time;
+    float max_accel;
     int max_attempts;
 };
 
@@ -35,12 +36,19 @@ private:
     RandomUnstuckOrder unstuckOrder;
 
     int attemptCount;
+    int noProgressCheckCount;
 
     float stageStartTime;
     float lastCheckTime;
     float lastEncoderPosition;
     float lastHeading;
     float lastErrorMagnitude;
+    float previousLeftPower;
+    float previousRightPower;
+    bool runningLateralShift;
+    float lateralShiftStageTime;
+    bool lateralShiftStageAtSpeed;
+    bool lateralShiftFinishing;
 
     float getHeadingChange(float currentHeading, float previousHeading) {
         float change = currentHeading - previousHeading;
@@ -69,15 +77,49 @@ private:
         }
     }
 
-    void applyArc(Drivetrain& drivetrain, float linearSpeed, float turnSpeed) {
-        float leftPower = linearSpeed + turnSpeed;
-        float rightPower = linearSpeed - turnSpeed;
+    bool applyArc(Drivetrain& drivetrain, float linearSpeed, float turnSpeed) {
+        float targetLeftPower = linearSpeed + turnSpeed;
+        float targetRightPower = linearSpeed - turnSpeed;
 
-        scaleDrivePower(leftPower, rightPower);
+        scaleDrivePower(targetLeftPower, targetRightPower);
+
+        float leftPower = targetLeftPower;
+        float rightPower = targetRightPower;
+
+        if (config.max_accel > 0.0f) {
+            float maxChange = config.max_accel / 100.0f;
+
+            if (leftPower > previousLeftPower + maxChange) {
+                leftPower = previousLeftPower + maxChange;
+            } else if (leftPower < previousLeftPower - maxChange) {
+                leftPower = previousLeftPower - maxChange;
+            }
+
+            if (rightPower > previousRightPower + maxChange) {
+                rightPower = previousRightPower + maxChange;
+            } else if (rightPower < previousRightPower - maxChange) {
+                rightPower = previousRightPower - maxChange;
+            }
+        }
+
         drivetrain.set_drive_power(leftPower, rightPower);
+        previousLeftPower = leftPower;
+        previousRightPower = rightPower;
+
+        return
+            std::fabs(leftPower - targetLeftPower) < 0.01f &&
+            std::fabs(rightPower - targetRightPower) < 0.01f;
     }
 
     void resetMonitor(Drivetrain& drivetrain, float errorMagnitude) {
+        noProgressCheckCount = 0;
+        lastCheckTime = master_timer.time(msec);
+        lastEncoderPosition = drivetrain.get_left_front_motor_position();
+        lastHeading = drivetrain.get_heading_degrees();
+        lastErrorMagnitude = errorMagnitude;
+    }
+
+    void advanceMonitorWindow(Drivetrain& drivetrain, float errorMagnitude) {
         lastCheckTime = master_timer.time(msec);
         lastEncoderPosition = drivetrain.get_left_front_motor_position();
         lastHeading = drivetrain.get_heading_degrees();
@@ -108,6 +150,10 @@ private:
     }
 
     float timeForStage(UnstuckArcStage currentStage) const {
+        if (runningLateralShift) {
+            return lateralShiftStageTime;
+        }
+
         if (currentStage == UNSTUCK_ARC_FORWARD_RIGHT ||
             currentStage == UNSTUCK_ARC_FORWARD_LEFT) {
             return config.forward_time;
@@ -116,19 +162,21 @@ private:
         return config.reverse_time;
     }
 
-    void applyStage(Drivetrain& drivetrain, UnstuckArcStage currentStage) {
+    bool applyStage(Drivetrain& drivetrain, UnstuckArcStage currentStage) {
         if (currentStage == UNSTUCK_ARC_FORWARD_RIGHT) {
-            applyArc(drivetrain, config.forward_speed, config.turn_speed);
+            return applyArc(drivetrain, config.forward_speed, config.turn_speed);
         }
         else if (currentStage == UNSTUCK_ARC_FORWARD_LEFT) {
-            applyArc(drivetrain, config.forward_speed, -config.turn_speed);
+            return applyArc(drivetrain, config.forward_speed, -config.turn_speed);
         }
         else if (currentStage == UNSTUCK_ARC_BACK_RIGHT) {
-            applyArc(drivetrain, -config.reverse_speed, config.turn_speed);
+            return applyArc(drivetrain, -config.reverse_speed, config.turn_speed);
         }
         else if (currentStage == UNSTUCK_ARC_BACK_LEFT) {
-            applyArc(drivetrain, -config.reverse_speed, -config.turn_speed);
+            return applyArc(drivetrain, -config.reverse_speed, -config.turn_speed);
         }
+
+        return false;
     }
 
     unsigned int makeSeed(Drivetrain& drivetrain) {
@@ -145,11 +193,18 @@ public:
           stage(UNSTUCK_ARC_IDLE),
           unstuckOrder(),
           attemptCount(0),
+          noProgressCheckCount(0),
           stageStartTime(0),
           lastCheckTime(0),
           lastEncoderPosition(0),
           lastHeading(0),
-          lastErrorMagnitude(0)
+          lastErrorMagnitude(0),
+          previousLeftPower(0),
+          previousRightPower(0),
+          runningLateralShift(false),
+          lateralShiftStageTime(0),
+          lateralShiftStageAtSpeed(false),
+          lateralShiftFinishing(false)
     {
     }
 
@@ -160,7 +215,14 @@ public:
     void initialize(Drivetrain& drivetrain, float errorMagnitude) {
         stage = UNSTUCK_ARC_IDLE;
         attemptCount = 0;
+        noProgressCheckCount = 0;
         stageStartTime = 0;
+        previousLeftPower = 0;
+        previousRightPower = 0;
+        runningLateralShift = false;
+        lateralShiftStageTime = 0;
+        lateralShiftStageAtSpeed = false;
+        lateralShiftFinishing = false;
         resetMonitor(drivetrain, errorMagnitude);
     }
 
@@ -223,8 +285,25 @@ public:
             config.error_progress_threshold > 0.0f &&
             errorProgress >= config.error_progress_threshold;
 
-        if (encoderMoved || headingMoved || errorImproved) {
+        bool onlyEncoderProgressAvailable =
+            config.heading_change_threshold <= 0.0f &&
+            config.error_progress_threshold <= 0.0f;
+
+        if (headingMoved ||
+            errorImproved ||
+            (onlyEncoderProgressAvailable && encoderMoved)) {
+
+            // A later obstruction should still be allowed to use unstuck.
+            // max_attempts only limits consecutive escapes with no real progress.
+            attemptCount = 0;
             resetMonitor(drivetrain, errorMagnitude);
+            return false;
+        }
+
+        noProgressCheckCount++;
+
+        if (noProgressCheckCount < REQUIRED_CONSECUTIVE_STUCK_CHECKS) {
+            advanceMonitorWindow(drivetrain, errorMagnitude);
             return false;
         }
 
@@ -243,7 +322,48 @@ public:
         }
 
         attemptCount++;
+        previousLeftPower = 0;
+        previousRightPower = 0;
+        runningLateralShift = false;
+        lateralShiftStageAtSpeed = false;
+        lateralShiftFinishing = false;
         unstuckOrder.reset(makeSeed(drivetrain));
+        stage = stageFromMove(unstuckOrder.current());
+        stageStartTime = master_timer.time(msec);
+        resetMonitor(drivetrain, errorMagnitude);
+        return true;
+    }
+
+    bool startLateralShift(
+        Drivetrain& drivetrain,
+        float errorMagnitude,
+        bool wasMovingForward,
+        float initialLeftPower,
+        float initialRightPower
+    ) {
+        if (!isEnabled()) {
+            return false;
+        }
+
+        if (attemptCount >= config.max_attempts) {
+            stage = UNSTUCK_ARC_FAILED;
+            drivetrain.set_drive_power(0, 0);
+            return false;
+        }
+
+        attemptCount++;
+        scaleDrivePower(initialLeftPower, initialRightPower);
+        previousLeftPower = initialLeftPower;
+        previousRightPower = initialRightPower;
+        runningLateralShift = true;
+        lateralShiftStageAtSpeed = false;
+        lateralShiftFinishing = false;
+        lateralShiftStageTime =
+            (wasMovingForward
+                ? config.reverse_time
+                : config.forward_time) *
+            LATERAL_SHIFT_TIME_MULTIPLIER;
+        unstuckOrder.resetLateralShift(makeSeed(drivetrain), wasMovingForward);
         stage = stageFromMove(unstuckOrder.current());
         stageStartTime = master_timer.time(msec);
         resetMonitor(drivetrain, errorMagnitude);
@@ -264,15 +384,46 @@ public:
         float elapsed = now - stageStartTime;
 
         if (isActive()) {
-            applyStage(drivetrain, stage);
+            if (runningLateralShift && lateralShiftFinishing) {
+                if (applyArc(drivetrain, 0.0f, 0.0f)) {
+                    stage = UNSTUCK_ARC_IDLE;
+                    previousLeftPower = 0;
+                    previousRightPower = 0;
+                    runningLateralShift = false;
+                    lateralShiftStageAtSpeed = false;
+                    lateralShiftFinishing = false;
+                    resetMonitor(drivetrain, errorMagnitude);
+                }
+
+                return true;
+            }
+
+            bool stageAtSpeed = applyStage(drivetrain, stage);
+
+            // Do not consume a stage's timed movement while acceleration
+            // limiting is still ramping toward the requested arc power.
+            if (!lateralShiftStageAtSpeed) {
+                if (stageAtSpeed) {
+                    lateralShiftStageAtSpeed = true;
+                    stageStartTime = now;
+                }
+
+                return true;
+            }
 
             if (elapsed >= timeForStage(stage)) {
                 if (unstuckOrder.advance()) {
                     stage = stageFromMove(unstuckOrder.current());
                     stageStartTime = now;
+                    lateralShiftStageAtSpeed = false;
                     resetMonitor(drivetrain, errorMagnitude);
+                } else if (runningLateralShift) {
+                    lateralShiftFinishing = true;
                 } else {
                     stage = UNSTUCK_ARC_IDLE;
+                    previousLeftPower = 0;
+                    previousRightPower = 0;
+                    runningLateralShift = false;
                     resetMonitor(drivetrain, errorMagnitude);
                 }
             }

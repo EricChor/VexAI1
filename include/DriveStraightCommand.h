@@ -61,6 +61,14 @@ class DriveStraightCommand : public Command{
 
         bool finished;
 
+        float getAverageDrivePosition() {
+            return
+                (
+                    drivetrain.get_left_front_motor_position() +
+                    drivetrain.get_right_front_motor_position()
+                ) / 2.0f;
+        }
+
     public:
         DriveStraightCommand(Drivetrain& drivetrain, DriveStraightTarget driveStraightTarget, DriveStraightConfig driveStraightConfig, DrivePID PID)
             :drivetrain(drivetrain),
@@ -74,7 +82,7 @@ class DriveStraightCommand : public Command{
             finished = false;
             DriveStraightVar& var = driveStraightVar;
 
-            var.initial_position = drivetrain.get_left_front_motor_position();
+            var.initial_position = getAverageDrivePosition();
             var.current_position = var.initial_position;
             var.end_time = master_timer.time() + driveStraightConfig.max_time;
             var.max_accel = driveStraightConfig.max_accel / 100;
@@ -127,7 +135,7 @@ class DriveStraightCommand : public Command{
 
             var.angular_derivative_error = var.angular_error - var.angular_previous_error;
             var.angular_previous_error = var.angular_error;
-            var.current_position = ((drivetrain.get_left_front_motor_position() - var.initial_position) * drivetrain.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivetrain.get_drivebase_gear_ratio()));
+            var.current_position = ((getAverageDrivePosition() - var.initial_position) * drivetrain.get_drivebase_wheel_diameter() * M_PI / 360.0f * (1.0f/drivetrain.get_drivebase_gear_ratio()));
             // std::cout << "Distance: " << driveStraightVar.current_position << std::endl;
 
             var.linear_error = target.target_distance - var.current_position;
@@ -138,13 +146,13 @@ class DriveStraightCommand : public Command{
 
             var.current_time = master_timer.time();
 
-            if (var.current_time >= var.end_time) {
-                var.timed_out = true;
-                finished = true;
+            if (unstuck.run(drivetrain, progressError)) {
                 return;
             }
 
-            if (unstuck.run(drivetrain, progressError)) {
+            if (var.current_time >= var.end_time) {
+                var.timed_out = true;
+                finished = true;
                 return;
             }
 
@@ -188,9 +196,22 @@ class DriveStraightCommand : public Command{
             var.left_drive_linear_velocity = PID.linear_kP * var.linear_error + PID.linear_kI * var.linear_integral_error + PID.linear_kD * var.linear_derivative_error;
             var.right_drive_linear_velocity = PID.linear_kP * var.linear_error + PID.linear_kI * var.linear_integral_error + PID.linear_kD * var.linear_derivative_error;
             
-            if(((var.left_drive_linear_velocity) > (var.prev_left_drive_linear_velocity + var.max_accel)) && (var.max_accel != 0)){
-                var.left_drive_linear_velocity = var.prev_left_drive_linear_velocity + var.max_accel;
-                var.right_drive_linear_velocity = var.prev_right_drive_linear_velocity + var.max_accel;
+            if (var.max_accel != 0) {
+                float maximum =
+                    var.prev_left_drive_linear_velocity + var.max_accel;
+                float minimum =
+                    var.prev_left_drive_linear_velocity - var.max_accel;
+
+                if (var.left_drive_linear_velocity > maximum) {
+                    var.left_drive_linear_velocity = maximum;
+                }
+
+                if (var.left_drive_linear_velocity < minimum) {
+                    var.left_drive_linear_velocity = minimum;
+                }
+
+                var.right_drive_linear_velocity =
+                    var.left_drive_linear_velocity;
             }
 
             if(fabs(var.left_drive_linear_velocity) > conf.max_linear_speed){
@@ -219,7 +240,17 @@ class DriveStraightCommand : public Command{
                 );
 
             if (unstuck.shouldStart(drivetrain, progressError, tryingToMove)) {
-                if (!unstuck.start(drivetrain, progressError)) {
+                bool movingForward =
+                    var.left_drive_linear_velocity +
+                    var.right_drive_linear_velocity >= 0.0f;
+
+                if (!unstuck.startLateralShift(
+                        drivetrain,
+                        progressError,
+                        movingForward,
+                        var.left_drive_linear_velocity + var.left_drive_angular_velocity,
+                        var.right_drive_linear_velocity + var.right_drive_angular_velocity
+                    )) {
                     var.timed_out = true;
                     finished = true;
                 }

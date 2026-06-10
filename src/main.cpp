@@ -41,6 +41,7 @@ void interactionPeriod(){
         positionTracking.get_x(),
         positionTracking.get_y(),
         positionTracking.get_heading());
+    reset_interaction_corner_search_monitor();
 
     while(true){
         drivebase.update_odom_pose();

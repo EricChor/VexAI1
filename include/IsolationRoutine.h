@@ -10,3 +10,8 @@
 extern SequentialCommandGroup AI_ISOLATION_ROUTE;
 
 extern void build_isolation_routine();
+
+extern void build_iso_route();
+
+extern SequentialCommandGroup AI_ISO_ROUTE;
+

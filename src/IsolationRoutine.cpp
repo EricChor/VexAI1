@@ -77,7 +77,20 @@ static DriveToPointConfig DriveToPointDefaultConfig{
 };
 
 static DrivePID isolationDefaultPID {
-    .linear_kP = 2,
+    .linear_kP = 1.2,
+    .linear_kI = 0.0,
+    .linear_kD = 0.1,
+
+    .angular_kP = 0.3,
+    .angular_kI = 0.0,
+    .angular_kD = 0.004,
+
+    .angular_integral_windup_threshold = 20,
+    .linear_integral_windup_threshold = 20
+};
+
+static DrivePID isofasterpid {
+    .linear_kP = 3.1415926,
     .linear_kI = 0.0,
     .linear_kD = 0.1,
 
@@ -339,8 +352,21 @@ void build_isolation_routine(){
 /////////////////////////////////////////////////////////////////////////////////////////////
 SequentialCommandGroup AI_ISO_ROUTE;
 DriveStraightTarget DST1{
-    .target_distance =32.5, .target_heading = 260
+    .target_distance =25, .target_heading = 240
 
+};
+
+DriveStraightTarget DST2{
+    .target_distance = -13, .target_heading =135
+
+};
+
+DriveStraightTarget DST3{
+    .target_distance = 24, .target_heading = 135
+};
+
+DriveStraightTarget DST4{
+    .target_distance = 24, .target_heading = 90
 };
 DriveStraightConfig DSC1{
     .max_angular_speed = 30, .max_linear_speed = 50, .max_time = 3000, .max_accel= 70, .acceptable_error = 2,
@@ -376,17 +402,54 @@ InertialTurnTarget ITT1{
     .target_heading = 128
 };
 
+InertialTurnTarget ITT4{
+    .target_heading = 0
+};
+
+InertialTurnTarget ITT2{
+.target_heading = 135
+};
+
+InertialTurnTarget ITT3{
+.target_heading = 90
+};
+
+WaitAndScoreConfig WASC1{
+    .score_mode = SCORE_MID, .score_time = 1000, .wait_time = 0
+};
+
 DriveStraightCommand DS1(drivebase,DST1, DSC1, isolationDefaultPID);
 IntakeWithSorting IWS1(intake, isolationIntakeSortingConfig);
 ParallelDeadlineGroup ISO_TOWER_ONE(&DS1);
 InertialTurnCommand ITC1(drivebase,ITT1,ITCg1,isolationDefaultPID);
+InertialTurnCommand ITC2(drivebase,ITT2,ITCg1, isolationDefaultPID);
+DriveStraightCommand DS2(drivebase, DST2, DSC1,isofasterpid);
+WaitAndScoreCommand WASCD1(intake, WASC1);
+InertialTurnCommand ITC3(drivebase,ITT3,ITCg1, isolationDefaultPID);
+DriveStraightCommand DS3(drivebase, DST3, DSC1, isolationDefaultPID);
+InertialTurnCommand ITC4(drivebase, ITT4, ITCg1, isolationDefaultPID);
+DriveStraightCommand DS4(drivebase, DST4, DSC1, isolationDefaultPID);
 
 void build_iso_route(){
 ISO_TOWER_ONE.addCommand(&IWS1);
 
 AI_ISO_ROUTE.addCommand(&ISO_TOWER_ONE);
-AI_ISO_ROUTE.addCommand(&ITC1);
+vex::task::sleep(100);
+AI_ISO_ROUTE.addCommand(&ITC2);
+vex::task::sleep(100);
+AI_ISO_ROUTE.addCommand(&DS2);
+vex::task::sleep(100);
+AI_ISO_ROUTE.addCommand(&WASCD1);
+vex::task::sleep(5000);
+AI_ISO_ROUTE.addCommand(&DS3);
+AI_ISO_ROUTE.addCommand(&ITC3);
 }
 
+void parking_route(){
+
+PARKING_AI_ROUTE.addCommand(&DS4);
+PARKING_AI_ROUTE.addCommand(&ITC4);
 
 
+
+}

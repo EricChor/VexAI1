@@ -15,3 +15,7 @@ extern void build_iso_route();
 
 extern SequentialCommandGroup AI_ISO_ROUTE;
 
+extern void parking_route();
+
+extern SequentialCommandGroup PARKING_AI_ROUTE;
+

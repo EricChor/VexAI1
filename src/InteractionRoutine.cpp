@@ -238,16 +238,16 @@ DrivePID wallAlignmentPID {
 // ------------------------------------------------------------
 
 FindBlockRawConfig findBlockRawConfig {
-    .numSequentialBlocks = 3,
-    .maxDifferenceDistance = 150
+    .numSequentialBlocks = 1,
+    .maxDifferenceDistance = 250
 };
 
 TrackBlockRawConfig trackBlockRawConfig {
     .cameraCenterX = 320,
     .cameraCenterY = 400,
 
-    .maxTrackingXJump = 150,
-    .maxTrackingYJump = 150,
+    .maxTrackingXJump = 200,
+    .maxTrackingYJump = 200,
 
     .maxLostFrames = 8
 };
@@ -257,13 +257,13 @@ TrackBlockRawConfig trackBlockRawConfig {
 // ------------------------------------------------------------
 
 findingBlocksConfig findBlockConfig {
-    .searchSpeed = 10,
+    .searchSpeed = 8,
     .maxSpeed = 25,
-    .minCenteringSpeed = 8,
+    .minCenteringSpeed = 4,
     .centeringAcceptableX = 15,
 
     .reverseSpeed = 25,
-    .forwardSpeed = 20,
+    .forwardSpeed = 15,
     .turnSpeed = 15,
     .unstuckMaxAccel = 100,
 
@@ -335,7 +335,8 @@ findingBlocksConfig findBlockConfig {
             .enabled = true
         },
         {
-            .minX = -30.0f,
+            .minX = -30.0f
+            ,
             .maxX = 30.0f,
             .minY = -72.0f,
             .maxY = -42.0f,
@@ -433,8 +434,8 @@ TrackingBlocksConfig trackBlockConfig {
     .maxForwardTime = 300,
     .minLinearSpeedForStuckCheck = 10,
     .minYErrorProgress = 5,
-    .maxTrackingDroppedFrames = 10,
-    .maxUnstuckAttempts = 1,
+    .maxTrackingDroppedFrames = 12,
+    .maxUnstuckAttempts = 2,
 
     .cameraHorizontalFovDegrees = 60,
 

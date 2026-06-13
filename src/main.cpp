@@ -5,6 +5,7 @@
 #include "JetsonSerial.h"
 #include "InteractionRoutine.h"
 #include "IsolationRoutine.h"
+
 using namespace vex;
 
 namespace {
@@ -26,7 +27,7 @@ void isolationPeriod(){
     scheduler.cancelAll();
     drivebase.stop();
     intake.stop();
-
+    
     //scheduler.schedule(&AI_ISOLATION_ROUTE);
     scheduler.schedule(&AI_ISO_ROUTE);
     positionTracking.update_raw_pose();
@@ -77,14 +78,17 @@ int main() {
     jetsonSerial.JetsonSerialSetup();
     
     build_interaction_routine();
-    build_isolation_routine();
+    // build_isolation_routine();
     build_iso_route();
     while(drivetrain_inertial.isCalibrating() || GPSSensor.isCalibrating() || GPSBackup.isCalibrating()){
         vex::task::sleep(10);
     }
-
+    intake_color_sorting_optical.setLightPower(100, percent);
+    intake_color_sorting_optical.setLight(ledState::on);
     Competition.bStopAllTasksBetweenModes = true;
     Competition.autonomous(isolationPeriod);
     Competition.drivercontrol(interactionPeriod);
-
+    
 }
+
+

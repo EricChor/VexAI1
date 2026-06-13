@@ -32,10 +32,10 @@ namespace {
         float sensorOffsetY =
             -rightOffsetInches * std::sin(headingRadians) +
             forwardOffsetInches * std::cos(headingRadians);
-
+            float fieldRotation = 180;
         return {
-            static_cast<float>(sensor.xPosition(inches) - sensorOffsetX),
-            static_cast<float>(sensor.yPosition(inches) - sensorOffsetY),
+            static_cast<float>((sensor.xPosition(inches) - sensorOffsetX)* std::cos(fieldRotation) - (sensor.yPosition(inches) - sensorOffsetY) * std::sin(fieldRotation)),
+            static_cast<float>((sensor.xPosition(inches) - sensorOffsetX)* std::sin(fieldRotation) + (sensor.yPosition(inches) - sensorOffsetY) * std::cos(fieldRotation)),
             heading
         };
     }
@@ -160,4 +160,5 @@ float PositionTracking::get_y() const{
 
 float PositionTracking::get_heading() const{
     return gpsPose.heading;
+
 }

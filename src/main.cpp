@@ -7,6 +7,20 @@
 #include "IsolationRoutine.h"
 using namespace vex;
 
+namespace {
+    const float BRAIN_DIAGNOSTIC_INTERVAL_MS = 200.0f;
+
+    void updateBrainDiagnostics(float& nextUpdateTime) {
+        float now = master_timer.time(msec);
+
+        if (now < nextUpdateTime) {
+            return;
+        }
+
+        jetsonSerial.print_block_pos_on_screen();
+        nextUpdateTime = now + BRAIN_DIAGNOSTIC_INTERVAL_MS;
+    }
+}
 
 void isolationPeriod(){
     scheduler.cancelAll();
@@ -20,12 +34,14 @@ void isolationPeriod(){
         positionTracking.get_x(),
         positionTracking.get_y(),
         positionTracking.get_heading());
+    float nextBrainDiagnosticTime = 0.0f;
+
     while(true){
         drivebase.update_odom_pose();
         scheduler.run();
         drivebase.apply_motor_power();
         intake.apply_motor_power();
-        jetsonSerial.print_block_pos_on_screen();
+        updateBrainDiagnostics(nextBrainDiagnosticTime);
         vex::task::sleep(10);
     }
 
@@ -43,13 +59,14 @@ void interactionPeriod(){
         positionTracking.get_y(),
         positionTracking.get_heading());
     reset_interaction_corner_search_monitor();
+    float nextBrainDiagnosticTime = 0.0f;
 
     while(true){
         drivebase.update_odom_pose();
         scheduler.run();
         drivebase.apply_motor_power();
         intake.apply_motor_power();
-        jetsonSerial.print_block_pos_on_screen();
+        updateBrainDiagnostics(nextBrainDiagnosticTime);
         vex::task::sleep(10);
     }
 }

@@ -259,6 +259,7 @@ TrackBlockRawConfig trackBlockRawConfig {
 findingBlocksConfig findBlockConfig {
     .searchSpeed = 10,
     .maxSpeed = 25,
+    .minCenteringSpeed = 8,
     .centeringAcceptableX = 15,
 
     .reverseSpeed = 25,
@@ -416,6 +417,8 @@ TrackingBlocksConfig trackBlockConfig {
 
     .maxLinearSpeed = 25,
     .maxAngularSpeed = 20,
+    .minLinearSpeed = 10,
+    .minAngularSpeed = 8,
 
     .stuckCheckTime = 750,
     .stuckEncoderChangeThreshold = 10,

@@ -17,6 +17,8 @@ struct TrackingBlocksConfig {
 
     float maxLinearSpeed;
     float maxAngularSpeed;
+    float minLinearSpeed;
+    float minAngularSpeed;
 
     // Anti-stuck settings
     float stuckCheckTime;                  // ms
@@ -161,8 +163,6 @@ private:
     }
 
     void estimateBlockFieldPosition(float blockDistance, float pixelX) {
-        positionTracking.update_raw_pose();
-
         float robotX = positionTracking.get_x();
         float robotY = positionTracking.get_y();
         float robotHeadingDeg = positionTracking.get_heading();
@@ -339,6 +339,9 @@ private:
         if (jetson.block_count <= 0) {
             return updateAllowedTrackingLostFrame();
         }
+
+        // Use one GPS pose for every candidate in this vision frame.
+        positionTracking.update_raw_pose();
 
         int targetX =
             var.lastBlockXPos >= 0 ?
@@ -584,6 +587,10 @@ private:
     }
 
     void runUnstuckState() {
+        // Keep consuming live frames so normal tracking resumes from current
+        // camera data instead of a queue of pre-recovery coordinates.
+        jetson.update_block_pose();
+
         float now = master_timer.time(msec);
         float elapsed = now - unstuckStartTime;
         bool stageAtSpeed = false;
@@ -802,6 +809,16 @@ public:
             }
         }
 
+        if (!xCentered &&
+            config.minAngularSpeed > 0.0f &&
+            std::fabs(angularSpeed) < config.minAngularSpeed) {
+
+            angularSpeed =
+                xError >= 0
+                    ? config.minAngularSpeed
+                    : -config.minAngularSpeed;
+        }
+
         yError = jetson.getYError();
         yDerivativeError = yError - yPrevError;
 
@@ -822,6 +839,19 @@ public:
             } else {
                 linearSpeed = -config.maxLinearSpeed;
             }
+        }
+
+        yCloseEnough =
+            std::abs(yError) <= config.acceptableYError;
+
+        if (!yCloseEnough &&
+            config.minLinearSpeed > 0.0f &&
+            std::fabs(linearSpeed) < config.minLinearSpeed) {
+
+            linearSpeed =
+                yError >= 0
+                    ? config.minLinearSpeed
+                    : -config.minLinearSpeed;
         }
 
         xPrevError = xError;
@@ -846,9 +876,6 @@ public:
             linearSpeed + angularSpeed,
             linearSpeed - angularSpeed
         );
-
-        yCloseEnough =
-            std::abs(yError) <= config.acceptableYError;
 
         if (xCentered && yCloseEnough) {
             drivetrain.set_drive_power(0, 0);

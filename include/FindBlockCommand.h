@@ -335,6 +335,7 @@
 struct findingBlocksConfig {
     float searchSpeed;
     float maxSpeed;
+    float minCenteringSpeed;
     int centeringAcceptableX;
 
     // Anti-stuck movement speeds
@@ -470,8 +471,6 @@ private:
     }
 
     void estimateBlockFieldPosition(float blockDistance, float pixelX) {
-        positionTracking.update_raw_pose();
-
         float robotX = positionTracking.get_x();
         float robotY = positionTracking.get_y();
         float robotHeadingDeg = positionTracking.get_heading();
@@ -639,6 +638,9 @@ private:
             return false;
         }
 
+        // Use one GPS pose for every candidate in this vision frame.
+        positionTracking.update_raw_pose();
+
         int targetX =
             var.lastBlockXPos >= 0 ?
             var.lastBlockXPos :
@@ -727,6 +729,9 @@ private:
         if (jetson.block_count <= 0) {
             return updateAllowedTrackingLostFrame();
         }
+
+        // Use one GPS pose for every candidate in this vision frame.
+        positionTracking.update_raw_pose();
 
         int targetX =
             var.lastBlockXPos >= 0 ?
@@ -1149,6 +1154,9 @@ public:
             float now = master_timer.time(msec);
 
             if (avoidingRejectedBlock) {
+                // Keep consuming live frames so serial data does not become
+                // stale while the robot is completing a recovery movement.
+                jetson.update_block_pose();
                 applySearchMovement();
                 updateStuckDetection();
 
@@ -1169,6 +1177,7 @@ public:
             // Once unstuck starts, finish all four randomized arc movements.
             // Vision detections during the escape must not cancel the sequence.
             if (runningSearchUnstuck) {
+                jetson.update_block_pose();
                 applySearchMovement();
                 updateStuckDetection();
                 return;
@@ -1250,6 +1259,16 @@ public:
                 } else {
                     angularSpeed = -config.maxSpeed;
                 }
+            }
+
+            if (std::abs(xError) > config.centeringAcceptableX &&
+                config.minCenteringSpeed > 0.0f &&
+                std::fabs(angularSpeed) < config.minCenteringSpeed) {
+
+                angularSpeed =
+                    xError >= 0
+                        ? config.minCenteringSpeed
+                        : -config.minCenteringSpeed;
             }
 
             if (currentBlockIsInsideAvoidZone()) {
